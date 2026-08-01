@@ -117,13 +117,16 @@ def detect_platform(url):
         return 'ok'
     if 'rutube.ru' in u:
         return 'rutube'
+    if 'x.com' in u or 'twitter.com' in u:
+        return 'x'
     return 'unknown'
 
 
 class DownloadTask:
-    def __init__(self, url, quality=None):
+    def __init__(self, url, quality=None, audio_only=False):
         self.url = url
         self.quality = quality
+        self.audio_only = audio_only
         self.status = 'waiting'
         self.progress = ''
         self.filename = None
@@ -255,6 +258,11 @@ def get_youtube_formats(url):
             'label': f"🎬 {max_h}p",
             'quality': f"{max_h}p",
         })
+    formats.append({
+        'height': 0,
+        'label': "🎵 MP3",
+        'quality': "mp3",
+    })
     return info, formats
 
 
@@ -742,6 +750,50 @@ def download_tt_media(url):
     return {'type': 'error', 'error': 'Не удалось скачать TikTok'}
 
 
+def download_x_media(url):
+    tmp_dir = os.path.join(DOWNLOAD_DIR, f"x_{uuid.uuid4().hex[:8]}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    try:
+        ydl_opts = {
+            'outtmpl': os.path.join(tmp_dir, '%(id)s.%(ext)s'),
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'socket_timeout': 30,
+            'writeinfojson': True,
+        }
+        ffmpeg_location = get_ffmpeg_location()
+        if ffmpeg_location:
+            ydl_opts['ffmpeg_location'] = ffmpeg_location
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+        if not info:
+            return {'type': 'error', 'error': 'Не удалось получить информацию'}
+        description = info.get('description', '') or info.get('fulltitle', '') or ''
+        entries = info.get('entries') or [info]
+        files = []
+        for entry in entries:
+            vid_id = entry.get('id', info.get('id', ''))
+            for ext in ['mp4', 'webm', 'jpg', 'jpeg', 'png']:
+                fp = os.path.join(tmp_dir, f'{vid_id}.{ext}')
+                if os.path.exists(fp) and os.path.getsize(fp) > 0:
+                    files.append(fp)
+                    break
+        if not files:
+            fn_list = glob.glob(os.path.join(tmp_dir, '*.*'))
+            files = [f for f in fn_list if os.path.getsize(f) > 0 and not f.endswith('.json')]
+        if files:
+            has_video = any(f.lower().endswith(('.mp4', '.webm', '.mov')) for f in files)
+            return {
+                'type': 'video' if has_video else 'photos',
+                'files': files,
+                'caption': description[:1024],
+            }
+    except Exception as e:
+        logger.error(f"X/Twitter download error: {e}", exc_info=True)
+    return {'type': 'error', 'error': 'Не удалось скачать из X/Twitter'}
+
+
 def download_video(task, msg_ref, loop, queue=None):
     url = task.url
     quality = task.quality
@@ -790,6 +842,52 @@ def download_video(task, msg_ref, loop, queue=None):
                     title = info.get('title', '')
                     vid_id = info.get('id', '')
                 tracker.title = title[:40] if title else ''
+
+                if getattr(task, 'audio_only', False):
+                    mp3_opts = {
+                        'format': 'bestaudio/best',
+                        'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
+                        'noplaylist': True,
+                        'quiet': True,
+                        'no_warnings': True,
+                        'socket_timeout': 30,
+                        'progress_hooks': [tracker.hook],
+                        'postprocessors': [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '320',
+                        }],
+                    }
+                    ffmpeg_location = get_ffmpeg_location()
+                    if ffmpeg_location:
+                        mp3_opts['ffmpeg_location'] = ffmpeg_location
+                    for cli_idx, client in enumerate(download_clients):
+                        try:
+                            mp3_dl = dict(mp3_opts)
+                            if client:
+                                mp3_dl['extractor_args'] = {'youtube': {'player_client': client}}
+                            with yt_dlp.YoutubeDL(mp3_dl) as ydl:
+                                ydl.download([url])
+                            break
+                        except Exception as dl_err:
+                            if cli_idx == len(download_clients) - 1:
+                                raise
+                            continue
+                    tracker.done()
+                    fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
+                    if not fn_list:
+                        return {'error': 'Файл не найден'}
+                    fn = fn_list[0]
+                    if not fn.endswith('.mp3'):
+                        os.rename(fn, fn.rsplit('.', 1)[0] + '.mp3')
+                        fn = fn.rsplit('.', 1)[0] + '.mp3'
+                    return {
+                        'filename': fn,
+                        'title': title or 'Audio',
+                        'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
+                        'filesize': os.path.getsize(fn),
+                        'description': ((info.get('description', '') or '')[:1000] if info else ''),
+                    }
 
                 is_short = '/shorts/' in url
                 dl_dir = DOWNLOAD_DIR
@@ -1163,6 +1261,38 @@ async def process_queue(chat_id, bot, loop):
                     await update_status(build_queue_text(queue))
                     continue
 
+                if detect_platform(task.url) == 'x':
+                    task.status = 'downloading'
+                    await update_status(build_queue_text(queue))
+                    x_result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: download_x_media(task.url)
+                    )
+                    if x_result.get('type') in ('video', 'photos'):
+                        files = x_result.get('files', [])
+                        caption = x_result.get('caption', '')
+                        for i, fpath in enumerate(files):
+                            try:
+                                cap = caption[:1024] if (i == 0 and caption) else None
+                                is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
+                                fobj = FSInputFile(fpath)
+                                if is_video:
+                                    await bot.send_video(chat_id=chat_id, video=fobj, caption=cap)
+                                else:
+                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                                if i < len(files) - 1:
+                                    await asyncio.sleep(0.5)
+                            except Exception as e:
+                                logger.error(f"X send [{i}] error: {e}")
+                                await asyncio.sleep(1)
+                        task.status = 'done'
+                        task.result = {'photos': files}
+                    else:
+                        raise RuntimeError(x_result.get('error', 'Не удалось скачать из X/Twitter'))
+
+                    queue.pop(0)
+                    await update_status(build_queue_text(queue))
+                    continue
+
                 if url_type == 'ig_post':
                     task.status = 'downloading'
                     await update_status(build_queue_text(queue))
@@ -1366,10 +1496,11 @@ async def main():
             "🎬 <b>Saver_bot от dshot.ru</b>\n\n"
             "Отправь ссылку на видео — скачаю!\n\n"
             "Поддерживаемые платформы:\n"
-            "• YouTube (видео + шортсы)\n"
+            "• YouTube (видео + шортсы + MP3)\n"
             "• VK (клипы + видео)\n"
             "• Instagram (рилсы + карусели)\n"
-            "• TikTok\n"
+            "• TikTok (видео + карусели)\n"
+            "• X/Twitter (видео + фото + текст)\n"
             "• Rutube\n\n"
             "Можно отправить несколько ссылок подряд —\n"
             "они встанут в очередь.\n\n"
@@ -1426,6 +1557,12 @@ async def main():
                 continue
 
             if platform == 'tiktok':
+                task = DownloadTask(url)
+                queue.append(task)
+                added += 1
+                continue
+
+            if platform == 'x':
                 task = DownloadTask(url)
                 queue.append(task)
                 added += 1
@@ -1520,10 +1657,12 @@ async def main():
         if chat_id not in user_locks:
             user_locks[chat_id] = asyncio.Lock()
 
-        task = DownloadTask(url, quality=quality)
+        is_mp3 = quality == 'mp3'
+        task = DownloadTask(url, quality=None if is_mp3 else quality, audio_only=is_mp3)
         user_queues[chat_id].append(task)
 
-        await callback.message.edit_text(f"✅ {quality} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
+        label = "🎵 MP3 аудио" if is_mp3 else quality
+        await callback.message.edit_text(f"✅ {label} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
 
         pending_yt.pop(str(chat_id), None)
 
