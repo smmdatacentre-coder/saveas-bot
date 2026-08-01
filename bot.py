@@ -15,7 +15,7 @@ import requests
 import yt_dlp
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, FSInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import Message, FSInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.enums import ParseMode
 
 logging.basicConfig(level=logging.INFO)
@@ -30,6 +30,7 @@ os.environ['PATH'] = BOT_DIR + ':' + os.environ.get('PATH', '')
 user_queues = {}
 user_locks = {}
 pending_yt = {}
+pending_vk = {}
 queue_workers = {}
 
 
@@ -239,6 +240,35 @@ def get_youtube_formats(url):
         if h:
             available_heights.add(h)
     popular = [1080, 720, 480, 360]
+    formats = []
+    for h in popular:
+        if h in available_heights:
+            formats.append({
+                'height': h,
+                'label': f"🎬 {h}p",
+                'quality': f"{h}p",
+            })
+    if not formats:
+        max_h = max(available_heights) if available_heights else 360
+        formats.append({
+            'height': max_h,
+            'label': f"🎬 {max_h}p",
+            'quality': f"{max_h}p",
+        })
+    return info, formats
+
+
+def get_vk_formats(url):
+    opts = make_ydl_opts()
+    opts['skip_download'] = True
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    available_heights = set()
+    for f in info.get('formats', []):
+        h = f.get('height')
+        if h and h >= 144:
+            available_heights.add(h)
+    popular = [1080, 720, 480, 360, 240, 144]
     formats = []
     for h in popular:
         if h in available_heights:
@@ -1324,6 +1354,7 @@ async def main():
     user_queues.clear()
     user_locks.clear()
     pending_yt.clear()
+    pending_vk.clear()
 
     bot = Bot(token=token)
     dp = Dispatcher()
@@ -1343,13 +1374,21 @@ async def main():
             "• Rutube\n\n"
             "Можно отправить несколько ссылок подряд —\n"
             "они встанут в очередь.\n\n"
-            "Для YouTube можно выбрать качество."
+            "Для YouTube и VK можно выбрать качество."
+        )
+        start_kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="🚀 Старт")]],
+            resize_keyboard=True
         )
         if os.path.exists(welcome_img):
             photo = FSInputFile(welcome_img)
-            await message.answer_photo(photo=photo, caption=text, parse_mode=ParseMode.HTML)
+            await message.answer_photo(photo=photo, caption=text, parse_mode=ParseMode.HTML, reply_markup=start_kb)
         else:
-            await message.answer(text, parse_mode=ParseMode.HTML)
+            await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=start_kb)
+
+    @dp.message(F.text == '🚀 Старт')
+    async def handle_start_btn(message: Message):
+        await cmd_start(message)
 
     @dp.message(F.text)
     async def handle_link(message: Message):
@@ -1421,6 +1460,32 @@ async def main():
                 except Exception as e:
                     await message.answer(f"❌ Ошибка: {str(e)[:100]}")
                 continue
+
+            if platform == 'vk':
+                try:
+                    info, formats = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: get_vk_formats(url)
+                    )
+                    buttons = []
+                    for fmt in formats:
+                        buttons.append([InlineKeyboardButton(
+                            text=fmt['label'],
+                            callback_data=f"vkq_{fmt['quality']}"
+                        )])
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+                    title = info.get('title', '')[:80] if info else ''
+                    pending_vk[str(chat_id)] = {'url': url}
+                    await message.answer(
+                        f"🎬 <b>{title}</b>\n\nВыбери качество:",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=keyboard
+                    )
+                except Exception as e:
+                    task = DownloadTask(url)
+                    queue.append(task)
+                    added += 1
+                continue
+
             else:
                 task = DownloadTask(url)
                 queue.append(task)
@@ -1462,6 +1527,38 @@ async def main():
         await callback.message.edit_text(f"✅ {quality} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
 
         pending_yt.pop(str(chat_id), None)
+
+        ensure_queue_worker(chat_id, bot, loop)
+
+    @dp.callback_query(F.data.startswith('vkq_'))
+    async def handle_vk_quality(callback: CallbackQuery):
+        parts = callback.data.split('_', 1)
+        if len(parts) < 2:
+            await callback.answer("Ошибка", show_alert=True)
+            return
+
+        quality = parts[1]
+        chat_id = callback.message.chat.id
+
+        pending = pending_vk.get(str(chat_id))
+        if not pending:
+            await callback.answer("Ссылка устарела", show_alert=True)
+            return
+
+        url = pending['url']
+        await callback.answer()
+
+        if chat_id not in user_queues:
+            user_queues[chat_id] = []
+        if chat_id not in user_locks:
+            user_locks[chat_id] = asyncio.Lock()
+
+        task = DownloadTask(url, quality=quality)
+        user_queues[chat_id].append(task)
+
+        await callback.message.edit_text(f"✅ {quality} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
+
+        pending_vk.pop(str(chat_id), None)
 
         ensure_queue_worker(chat_id, bot, loop)
 
