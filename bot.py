@@ -1376,7 +1376,7 @@ async def process_queue(chat_id, bot, loop):
                                 fobj = FSInputFile(fpath)
                                 thumb_obj = FSInputFile(thumb_path) if thumb_path else None
                                 if is_video:
-                                    await bot.send_video(chat_id=chat_id, video=fobj, caption=cap)
+                                    await bot.send_document(chat_id=chat_id, document=fobj, caption=cap)
                                 else:
                                     await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
                                 if thumb_path and os.path.exists(thumb_path):
