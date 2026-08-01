@@ -431,6 +431,12 @@ def download_ig_post(url):
                                 with open(fp, 'wb') as f:
                                     f.write(dr.content)
                                 photos.append(fp)
+                                w = vids[0].get('width', 0)
+                                h = vids[0].get('height', 0)
+                                if w and h and w == h:
+                                    logger.warning(f"IG reel {shortcode} is square ({w}x{h}), trying yt-dlp fallback")
+                                    photos.pop()
+                                    os.remove(fp)
                     else:
                         imgs = item.get('image_versions2', {}).get('candidates', [])
                         if imgs:
