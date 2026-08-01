@@ -576,8 +576,7 @@ def download_video(task, msg_ref, loop, queue=None):
                     ffmpeg_location = get_ffmpeg_location()
                     dl_opts = {
                         'extractor_args': {'youtube': {'player_client': ['android_vr']}},
-                        'format': 'bestvideo[height<=1080][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best',
-                        'merge_output_format': 'mp4',
+                        'format': 'best[height<=1080][ext=mp4][vcodec!=none][acodec!=none]/best[height<=1080][ext=mp4]/best[height<=1080]/best',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
                         'noplaylist': True,
                         'quiet': True,
@@ -592,8 +591,7 @@ def download_video(task, msg_ref, loop, queue=None):
                     ffmpeg_location = get_ffmpeg_location()
                     dl_opts = {
                         'extractor_args': {'youtube': {'player_client': ['android_vr']}},
-                        'format': f'bestvideo[height<={h}][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/bestvideo+bestaudio/best',
-                        'merge_output_format': 'mp4',
+                        'format': f'best[height<={h}][ext=mp4][vcodec!=none][acodec!=none]/best[height<={h}][ext=mp4]/best[height<={h}]/best',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
                         'noplaylist': True,
                         'quiet': True,
@@ -671,8 +669,7 @@ def download_video_raw(url, quality=None):
     platform = detect_platform(url)
     if platform == 'youtube':
         opts['extractor_args'] = {'youtube': {'player_client': ['android_vr']}}
-        opts['format'] = 'bestvideo[ext=mp4]+bestaudio/bestvideo+bestaudio/best[ext=mp4]/best'
-        opts['merge_output_format'] = 'mp4'
+        opts['format'] = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best'
     elif platform == 'instagram':
         cookies_file = os.path.join(BOT_DIR, 'cookies.txt')
         if os.path.exists(cookies_file):
@@ -702,6 +699,8 @@ def remux_mp4(filepath):
     """Re-mux mp4 with faststart and correct aspect ratio for Telegram."""
     if not filepath.endswith('.mp4'):
         return filepath
+    if not shutil.which('ffmpeg') and not os.path.exists(os.path.join(BOT_DIR, 'ffmpeg')):
+        return filepath
     out = filepath + '.fixed.mp4'
     try:
         ffmpeg_path = get_ffmpeg_path()
@@ -729,6 +728,8 @@ def extract_thumbnail(filepath):
     """Extract thumbnail from video for Telegram preview."""
     if not filepath.lower().endswith(('.mp4', '.mov', '.webm', '.mkv')):
         return None
+    if not shutil.which('ffmpeg') and not os.path.exists(os.path.join(BOT_DIR, 'ffmpeg')):
+        return None
     thumb_path = filepath + '.thumb.jpg'
     try:
         ffmpeg_path = get_ffmpeg_path()
@@ -750,6 +751,8 @@ def extract_thumbnail(filepath):
 
 
 def extract_video_dimensions(filepath):
+    if not shutil.which('ffmpeg') and not os.path.exists(os.path.join(BOT_DIR, 'ffmpeg')):
+        return None, None
     try:
         ffmpeg_path = get_ffmpeg_path()
         r = subprocess.run([ffmpeg_path, '-i', filepath], capture_output=True, text=True, timeout=10)
