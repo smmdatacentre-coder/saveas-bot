@@ -921,7 +921,10 @@ def download_video(task, msg_ref, loop, queue=None):
                                 raise
                             continue
                     tracker.done()
-                    fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
+                    audio_exts = ('.m4a', '.webm', '.ogg', '.opus', '.mp3', '.wav', '.aac')
+                    fn_list = [f for f in glob.glob(os.path.join(dl_dir, f'{vid_id}.*')) if f.lower().endswith(audio_exts)]
+                    if not fn_list:
+                        fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
                     if not fn_list:
                         return {'error': 'Файл не найден'}
                     fn = fn_list[0]
