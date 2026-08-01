@@ -203,6 +203,10 @@ class ProgressTracker:
         self.task.progress = ''
 
 
+def get_youtube_proxy():
+    return os.environ.get('YOUTUBE_PROXY', '').strip() or None
+
+
 def make_ydl_opts(fmt=None, quality=None):
     base = {
         'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
@@ -236,6 +240,9 @@ def get_youtube_formats(url):
     opts = make_ydl_opts()
     opts['extractor_args'] = {'youtube': {'player_client': ['android_vr']}}
     opts['skip_download'] = True
+    proxy = get_youtube_proxy()
+    if proxy:
+        opts['proxy'] = proxy
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     available_heights = set()
@@ -863,6 +870,57 @@ def download_x_media(url):
     return {'type': 'error', 'error': 'Не удалось скачать из X/Twitter'}
 
 
+def download_youtube_cobalt(url, audio_only=False):
+    """Fallback: use cobalt.tools API to download YouTube when yt-dlp is blocked."""
+    try:
+        payload = {
+            'url': url,
+            'vCodec': 'h264',
+            'vQuality': '720',
+            'aFormat': 'mp3',
+            'isAudioOnly': audio_only,
+            'filenamePattern': 'basic',
+        }
+        resp = requests.post(
+            'https://api.cobalt.tools/api/json',
+            json=payload,
+            headers={
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+            },
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            logger.warning(f"Cobalt API HTTP {resp.status_code}")
+            return None
+        data = resp.json()
+        if data.get('status') == 'error':
+            logger.warning(f"Cobalt error: {data.get('error', {}).get('code', 'unknown')}")
+            return None
+        download_url = data.get('url')
+        if not download_url:
+            return None
+        tmp_dir = os.path.join(DOWNLOAD_DIR, f"cobalt_{uuid.uuid4().hex[:8]}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        filename = data.get('filename', 'video.mp4')
+        if audio_only and not filename.endswith(('.mp3', '.m4a', '.webm')):
+            filename = filename.rsplit('.', 1)[0] + '.mp3'
+        filepath = os.path.join(tmp_dir, filename)
+        dr = requests.get(download_url, timeout=300, stream=True)
+        if dr.status_code != 200:
+            logger.warning(f"Cobalt download HTTP {dr.status_code}")
+            return None
+        with open(filepath, 'wb') as f:
+            for chunk in dr.iter_content(chunk_size=8192):
+                f.write(chunk)
+        if os.path.getsize(filepath) > 0:
+            logger.info(f"Cobalt download success: {filepath}")
+            return filepath
+    except Exception as e:
+        logger.error(f"Cobalt download error: {e}")
+    return None
+
+
 def download_video(task, msg_ref, loop, queue=None):
     url = task.url
     quality = task.quality
@@ -915,7 +973,7 @@ def download_video(task, msg_ref, loop, queue=None):
                 dl_dir = DOWNLOAD_DIR
 
                 ffmpeg_location = get_ffmpeg_location()
-                download_clients = [None, ['web'], ['mweb'], ['android']]
+                download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
 
                 if getattr(task, 'audio_only', False):
                     ffmpeg_location = get_ffmpeg_location()
@@ -948,24 +1006,35 @@ def download_video(task, msg_ref, loop, queue=None):
                                 raise
                             continue
                     else:
-                        logger.warning("All YouTube MP3 clients failed, trying embed/nocookie fallback...")
-                        fallback_urls = [
-                            url.replace('youtube.com', 'youtube-nocookie.com'),
-                            f"https://www.youtube.com/embed/{vid_id}",
-                        ]
-                        for fallback_url in fallback_urls:
-                            try:
-                                mp3_dl = dict(mp3_opts)
-                                if ffmpeg_location:
-                                    mp3_dl['ffmpeg_location'] = ffmpeg_location
-                                with yt_dlp.YoutubeDL(mp3_dl) as ydl:
-                                    ydl.download([fallback_url])
-                                break
-                            except Exception as fb_err:
-                                logger.warning(f"YouTube MP3 fallback {fallback_url} failed: {fb_err}")
-                                continue
-                        else:
-                            raise
+                        logger.warning("All YouTube MP3 clients failed, trying cobalt.tools API...")
+                        cobalt_file = download_youtube_cobalt(url, audio_only=True)
+                        if cobalt_file:
+                            tracker.done()
+                            if not ffmpeg_location:
+                                return {'error': 'MP3 требует ffmpeg на сервере'}
+                            audio_exts = ('.mp3', '.m4a', '.webm', '.ogg', '.opus', '.wav', '.aac')
+                            if not cobalt_file.lower().endswith(audio_exts):
+                                try:
+                                    audio_fn = cobalt_file.rsplit('.', 1)[0] + '.mp3'
+                                    subprocess.run(
+                                        [ffmpeg_path, '-y', '-i', cobalt_file, '-vn',
+                                         '-acodec', 'libmp3lame', '-ab', '320k', audio_fn],
+                                        capture_output=True, timeout=120
+                                    )
+                                    if os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
+                                        os.remove(cobalt_file)
+                                        cobalt_file = audio_fn
+                                except Exception:
+                                    pass
+                            return {
+                                'filename': cobalt_file,
+                                'title': title or 'Audio',
+                                'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
+                                'filesize': os.path.getsize(cobalt_file),
+                                'description': ((info.get('description', '') or '')[:1000] if info else ''),
+                                'audio_only': True,
+                            }
+                        raise
                     tracker.done()
                     audio_exts = ('.mp3', '.m4a', '.webm', '.ogg', '.opus', '.wav', '.aac')
                     fn_list = [f for f in glob.glob(os.path.join(dl_dir, f'{vid_id}.*')) if f.lower().endswith(audio_exts)]
@@ -1022,7 +1091,7 @@ def download_video(task, msg_ref, loop, queue=None):
                     dl_format = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best'
 
                 ffmpeg_location = get_ffmpeg_location()
-                download_clients = [None, ['web'], ['mweb'], ['android'], ['ios']]
+                download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
                 last_err = None
                 for cli_idx, client in enumerate(download_clients):
                     try:
@@ -1049,33 +1118,25 @@ def download_video(task, msg_ref, loop, queue=None):
                             raise
                         continue
                 else:
-                    logger.warning("All YouTube clients failed, trying embed/nocookie fallback...")
-                    # Try youtube-nocookie.com and embed URL as fallback
-                    fallback_urls = [
-                        url.replace('youtube.com', 'youtube-nocookie.com'),
-                        f"https://www.youtube.com/embed/{vid_id}",
-                    ]
-                    for fallback_url in fallback_urls:
-                        try:
-                            dl_opts = {
-                                'format': dl_format,
-                                'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
-                                'noplaylist': True,
-                                'quiet': True,
-                                'no_warnings': True,
-                                'socket_timeout': 30,
-                                'progress_hooks': [tracker.hook],
-                            }
-                            if ffmpeg_location:
-                                dl_opts['ffmpeg_location'] = ffmpeg_location
-                            with yt_dlp.YoutubeDL(dl_opts) as ydl:
-                                ydl.download([fallback_url])
-                            break
-                        except Exception as fb_err:
-                            logger.warning(f"YouTube fallback {fallback_url} failed: {fb_err}")
-                            continue
-                    else:
-                        raise last_err
+                    logger.warning("All YouTube clients failed, trying cobalt.tools API...")
+                    cobalt_file = download_youtube_cobalt(url, audio_only=False)
+                    if cobalt_file:
+                        tracker.done()
+                        fn = cobalt_file
+                        sz = os.path.getsize(fn)
+                        if sz == 0:
+                            os.remove(fn)
+                            return {'error': 'Файл пустой'}
+                        thumb = extract_thumbnail(fn)
+                        return {
+                            'filename': fn,
+                            'title': title or 'Видео',
+                            'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
+                            'filesize': sz,
+                            'description': ((info.get('description', '') or '')[:1000] if info else ''),
+                            'thumb': thumb,
+                        }
+                    raise last_err
                 tracker.done()
 
                 fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
