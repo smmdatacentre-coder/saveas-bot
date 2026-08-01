@@ -38,6 +38,9 @@ def get_ffmpeg_path():
     bundled = os.path.join(BOT_DIR, 'ffmpeg')
     if os.path.exists(bundled) and os.access(bundled, os.X_OK):
         return bundled
+    for p in ['/usr/local/bin/ffmpeg', shutil.which('ffmpeg')]:
+        if p and os.path.exists(p) and os.access(p, os.X_OK):
+            return p
     return shutil.which('ffmpeg') or 'ffmpeg'
 
 
@@ -424,19 +427,24 @@ def download_ig_post(url):
                     elif media_type == 2:
                         vids = item.get('video_versions', [])
                         if vids:
-                            vids.sort(key=lambda v: v.get('width', 0) * v.get('height', 0), reverse=True)
-                            dr = requests.get(vids[0]['url'], timeout=120, headers={'User-Agent': 'Instagram 301.0.0.27.98'})
+                            # Prefer non-square vertical version (height > width), then by area
+                            def ig_vkey(v):
+                                w2 = v.get('width', 0)
+                                h2 = v.get('height', 0)
+                                is_square = 1 if (w2 and h2 and w2 == h2) else 0
+                                return (is_square, -(w2 * h2))
+                            vids.sort(key=ig_vkey)
+                            chosen = vids[0]
+                            cw = chosen.get('width', 0)
+                            ch = chosen.get('height', 0)
+                            dr = requests.get(chosen['url'], timeout=120, headers={'User-Agent': 'Instagram 301.0.0.27.98'})
                             if dr.status_code == 200:
                                 fp = os.path.join(tmp_dir, "0.mp4")
                                 with open(fp, 'wb') as f:
                                     f.write(dr.content)
                                 photos.append(fp)
-                                w = vids[0].get('width', 0)
-                                h = vids[0].get('height', 0)
-                                if w and h and w == h:
-                                    logger.warning(f"IG reel {shortcode} is square ({w}x{h}), trying yt-dlp fallback")
-                                    photos.pop()
-                                    os.remove(fp)
+                                if cw and ch and cw == ch:
+                                    logger.warning(f"IG reel {shortcode}: only square ({cw}x{ch}) available from API")
                     else:
                         imgs = item.get('image_versions2', {}).get('candidates', [])
                         if imgs:
@@ -959,13 +967,38 @@ def download_video(task, msg_ref, loop, queue=None):
                         else:
                             raise
                     tracker.done()
-                    audio_exts = ('.m4a', '.webm', '.ogg', '.opus', '.mp3', '.wav', '.aac')
+                    audio_exts = ('.mp3', '.m4a', '.webm', '.ogg', '.opus', '.wav', '.aac')
                     fn_list = [f for f in glob.glob(os.path.join(dl_dir, f'{vid_id}.*')) if f.lower().endswith(audio_exts)]
                     if not fn_list:
                         fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
                     if not fn_list:
                         return {'error': 'Файл не найден'}
                     fn = fn_list[0]
+                    if not fn.lower().endswith(audio_exts):
+                        if ffmpeg_location:
+                            logger.warning(f"MP3: got video file {fn}, trying to extract audio...")
+                            try:
+                                import subprocess as sp
+                                audio_fn = fn.rsplit('.', 1)[0] + '.mp3'
+                                sp.run(
+                                    [ffmpeg_path, '-y', '-i', fn, '-vn',
+                                     '-acodec', 'libmp3lame', '-ab', '320k', audio_fn],
+                                    capture_output=True, timeout=120
+                                )
+                                if os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
+                                    os.remove(fn)
+                                    fn = audio_fn
+                                else:
+                                    os.remove(fn)
+                                    return {'error': 'MP3: ffmpeg не смог извлечь аудио'}
+                            except Exception as e:
+                                logger.error(f"MP3 extract error: {e}")
+                                if os.path.exists(fn):
+                                    os.remove(fn)
+                                return {'error': f'MP3 ошибка: {str(e)[:100]}'}
+                        else:
+                            os.remove(fn)
+                            return {'error': 'MP3 требует ffmpeg на сервере'}
                     if not ffmpeg_location:
                         return {'error': 'MP3 требует ffmpeg на сервере'}
                     return {
@@ -1191,17 +1224,33 @@ def extract_thumbnail(filepath):
 
 
 def extract_video_dimensions(filepath):
-    if not shutil.which('ffmpeg') and not os.path.exists(os.path.join(BOT_DIR, 'ffmpeg')):
-        return None, None
-    try:
-        ffmpeg_path = get_ffmpeg_path()
-        r = subprocess.run([ffmpeg_path, '-i', filepath], capture_output=True, text=True, timeout=10)
-        for line in r.stderr.split('\n'):
-            m = re.search(r'(\d+)x(\d+)', line)
-            if m:
-                return int(m.group(1)), int(m.group(2))
-    except Exception:
-        pass
+    for tool in ['ffprobe', 'ffmpeg']:
+        tool_path = shutil.which(tool)
+        if not tool_path:
+            bundled = os.path.join(BOT_DIR, tool)
+            if os.path.exists(bundled) and os.access(bundled, os.X_OK):
+                tool_path = bundled
+        if not tool_path:
+            continue
+        try:
+            if tool == 'ffprobe':
+                r = subprocess.run(
+                    [tool_path, '-v', 'error', '-select_streams', 'v:0',
+                     '-show_entries', 'stream=width,height',
+                     '-of', 'csv=p=0', filepath],
+                    capture_output=True, text=True, timeout=10
+                )
+                parts = r.stdout.strip().split(',')
+                if len(parts) == 2:
+                    return int(parts[0]), int(parts[1])
+            else:
+                r = subprocess.run([tool_path, '-i', filepath], capture_output=True, text=True, timeout=10)
+                for line in r.stderr.split('\n'):
+                    m = re.search(r'(\d+)x(\d+)', line)
+                    if m:
+                        return int(m.group(1)), int(m.group(2))
+        except Exception:
+            pass
     return None, None
 
 
