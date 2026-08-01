@@ -1227,6 +1227,7 @@ async def process_queue(chat_id, bot, loop):
 
                     try:
                         is_youtube = detect_platform(task.url) == 'youtube'
+                        is_vk = detect_platform(task.url) == 'vk'
                         is_short = '/shorts/' in task.url if is_youtube else False
                         is_high_quality = result['filesize'] > 50 * 1024 * 1024
 
@@ -1255,7 +1256,7 @@ async def process_queue(chat_id, bot, loop):
                                 send_kwargs['width'] = w
                                 send_kwargs['height'] = h
                             await bot.send_video(**send_kwargs)
-                        elif is_youtube:
+                        elif is_youtube or is_vk:
                             doc_file = FSInputFile(result['filename'])
                             await bot.send_document(
                                 chat_id=chat_id, document=doc_file,
