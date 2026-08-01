@@ -892,7 +892,7 @@ def download_video(task, msg_ref, loop, queue=None):
 
                 if getattr(task, 'audio_only', False):
                     mp3_opts = {
-                        'format': 'ba/ba*/bestaudio',
+                        'format': 'bestaudio',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
                         'noplaylist': True,
                         'quiet': True,
@@ -928,9 +928,6 @@ def download_video(task, msg_ref, loop, queue=None):
                     if not fn_list:
                         return {'error': 'Файл не найден'}
                     fn = fn_list[0]
-                    if ffmpeg_location and not fn.endswith('.mp3'):
-                        os.rename(fn, fn.rsplit('.', 1)[0] + '.mp3')
-                        fn = fn.rsplit('.', 1)[0] + '.mp3'
                     return {
                         'filename': fn,
                         'title': title or 'Audio',
