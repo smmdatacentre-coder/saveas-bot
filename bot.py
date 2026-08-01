@@ -758,13 +758,9 @@ def download_video(task, msg_ref, loop, queue=None):
         elif platform == 'vk':
             if quality:
                 h = int(quality.replace('p', ''))
-                opts['format'] = f'bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/bestvideo+bestaudio/best'
+                opts['format'] = f'bestvideo[height<={h}]+bestaudio/best[height<={h}]/best'
             else:
-                opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best'
-            opts['merge_output_format'] = 'mp4'
-            ffmpeg_location = get_ffmpeg_location()
-            if ffmpeg_location:
-                opts['ffmpeg_location'] = ffmpeg_location
+                opts['format'] = 'best'
         elif platform == 'instagram':
             cookies_file = get_instagram_cookiefile()
             if cookies_file:
