@@ -892,7 +892,7 @@ def download_video(task, msg_ref, loop, queue=None):
 
                 if getattr(task, 'audio_only', False):
                     mp3_opts = {
-                        'format': 'bestaudio',
+                        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
                         'noplaylist': True,
                         'quiet': True,
@@ -949,7 +949,7 @@ def download_video(task, msg_ref, loop, queue=None):
                     dl_format = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best'
 
                 ffmpeg_location = get_ffmpeg_location()
-                download_clients = [None, ['web'], ['mweb'], ['android']]
+                download_clients = [None, ['web'], ['mweb'], ['android'], ['ios']]
                 for cli_idx, client in enumerate(download_clients):
                     try:
                         dl_opts = {
