@@ -908,14 +908,6 @@ def download_video(task, msg_ref, loop, queue=None):
                             'preferredcodec': 'mp3',
                             'preferredquality': '320',
                         }]
-                    ffmpeg_location = get_ffmpeg_location()
-                    if ffmpeg_location:
-                        mp3_opts['ffmpeg_location'] = ffmpeg_location
-                        mp3_opts['postprocessors'] = [{
-                            'key': 'FFmpegExtractAudio',
-                            'preferredcodec': 'mp3',
-                            'preferredquality': '320',
-                        }]
                     for cli_idx, client in enumerate(download_clients):
                         try:
                             mp3_dl = dict(mp3_opts)
