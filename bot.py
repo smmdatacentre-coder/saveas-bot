@@ -897,6 +897,7 @@ def download_video(task, msg_ref, loop, queue=None):
                 download_clients = [None, ['web'], ['mweb'], ['android']]
 
                 if getattr(task, 'audio_only', False):
+                    ffmpeg_location = get_ffmpeg_location()
                     mp3_opts = {
                         'format': 'bestaudio/best',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
@@ -906,7 +907,6 @@ def download_video(task, msg_ref, loop, queue=None):
                         'socket_timeout': 30,
                         'progress_hooks': [tracker.hook],
                     }
-                    ffmpeg_location = get_ffmpeg_location()
                     if ffmpeg_location:
                         mp3_opts['ffmpeg_location'] = ffmpeg_location
                         mp3_opts['postprocessors'] = [{
@@ -934,6 +934,8 @@ def download_video(task, msg_ref, loop, queue=None):
                     if not fn_list:
                         return {'error': 'Файл не найден'}
                     fn = fn_list[0]
+                    if not ffmpeg_location:
+                        return {'error': 'MP3 требует ffmpeg на сервере'}
                     return {
                         'filename': fn,
                         'title': title or 'Audio',
