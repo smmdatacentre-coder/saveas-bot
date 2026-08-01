@@ -934,6 +934,7 @@ def download_video(task, msg_ref, loop, queue=None):
                         'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
                         'filesize': os.path.getsize(fn),
                         'description': ((info.get('description', '') or '')[:1000] if info else ''),
+                        'audio_only': True,
                     }
 
                 is_short = '/shorts/' in url
@@ -1451,6 +1452,9 @@ async def process_queue(chat_id, bot, loop):
                                 send_kwargs['width'] = w
                                 send_kwargs['height'] = h
                             await bot.send_video(**send_kwargs)
+                        elif result.get('audio_only'):
+                            audio_file = FSInputFile(result['filename'])
+                            await bot.send_audio(chat_id=chat_id, audio=audio_file, caption=f"🎵 {result.get('title', '')[:80]}" if result.get('title') else None)
                         elif is_youtube or is_vk:
                             doc_file = FSInputFile(result['filename'])
                             await bot.send_document(
