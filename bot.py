@@ -466,6 +466,13 @@ def download_ig_post(url):
                     title = info.get('title', '') or caption
                     for fp in glob.glob(os.path.join(tmp_dir, f"{info.get('id', '')}.*")):
                         if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                            # Check if downloaded video is square (common issue with IG reels)
+                            if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                                w, h = extract_video_dimensions(fp)
+                                if w and h and w == h:
+                                    logger.warning(f"IG yt-dlp fallback: square video ({w}x{h}), removing")
+                                    os.remove(fp)
+                                    continue
                             photos.append(fp)
         except Exception as e:
             logger.error(f"Instagram yt-dlp fallback error: {e}")
@@ -484,6 +491,12 @@ def download_ig_post(url):
                 for fn in sorted(files):
                     fp = os.path.join(root, fn)
                     if os.path.getsize(fp) > 0:
+                        if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                            w, h = extract_video_dimensions(fp)
+                            if w and h and w == h:
+                                logger.warning(f"IG gallery-dl: square video ({w}x{h}), removing")
+                                os.remove(fp)
+                                continue
                         photos.append(fp)
         except Exception as e:
             logger.error(f"gallery-dl fallback error: {e}")
@@ -926,6 +939,25 @@ def download_video(task, msg_ref, loop, queue=None):
                             if cli_idx == len(download_clients) - 1:
                                 raise
                             continue
+                    else:
+                        logger.warning("All YouTube MP3 clients failed, trying embed/nocookie fallback...")
+                        fallback_urls = [
+                            url.replace('youtube.com', 'youtube-nocookie.com'),
+                            f"https://www.youtube.com/embed/{vid_id}",
+                        ]
+                        for fallback_url in fallback_urls:
+                            try:
+                                mp3_dl = dict(mp3_opts)
+                                if ffmpeg_location:
+                                    mp3_dl['ffmpeg_location'] = ffmpeg_location
+                                with yt_dlp.YoutubeDL(mp3_dl) as ydl:
+                                    ydl.download([fallback_url])
+                                break
+                            except Exception as fb_err:
+                                logger.warning(f"YouTube MP3 fallback {fallback_url} failed: {fb_err}")
+                                continue
+                        else:
+                            raise
                     tracker.done()
                     audio_exts = ('.m4a', '.webm', '.ogg', '.opus', '.mp3', '.wav', '.aac')
                     fn_list = [f for f in glob.glob(os.path.join(dl_dir, f'{vid_id}.*')) if f.lower().endswith(audio_exts)]
@@ -958,6 +990,7 @@ def download_video(task, msg_ref, loop, queue=None):
 
                 ffmpeg_location = get_ffmpeg_location()
                 download_clients = [None, ['web'], ['mweb'], ['android'], ['ios']]
+                last_err = None
                 for cli_idx, client in enumerate(download_clients):
                     try:
                         dl_opts = {
@@ -977,10 +1010,39 @@ def download_video(task, msg_ref, loop, queue=None):
                             ydl.download([url])
                         break
                     except Exception as dl_err:
+                        last_err = dl_err
                         logger.warning(f"YouTube client {client} failed: {dl_err}")
                         if cli_idx == len(download_clients) - 1:
                             raise
                         continue
+                else:
+                    logger.warning("All YouTube clients failed, trying embed/nocookie fallback...")
+                    # Try youtube-nocookie.com and embed URL as fallback
+                    fallback_urls = [
+                        url.replace('youtube.com', 'youtube-nocookie.com'),
+                        f"https://www.youtube.com/embed/{vid_id}",
+                    ]
+                    for fallback_url in fallback_urls:
+                        try:
+                            dl_opts = {
+                                'format': dl_format,
+                                'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
+                                'noplaylist': True,
+                                'quiet': True,
+                                'no_warnings': True,
+                                'socket_timeout': 30,
+                                'progress_hooks': [tracker.hook],
+                            }
+                            if ffmpeg_location:
+                                dl_opts['ffmpeg_location'] = ffmpeg_location
+                            with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                                ydl.download([fallback_url])
+                            break
+                        except Exception as fb_err:
+                            logger.warning(f"YouTube fallback {fallback_url} failed: {fb_err}")
+                            continue
+                    else:
+                        raise last_err
                 tracker.done()
 
                 fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
@@ -1033,8 +1095,8 @@ def download_video(task, msg_ref, loop, queue=None):
                 return {'error': 'Скачивание прервано: медленная скорость. Попробуйте позже или другое качество'}
             if 'Private' in msg or "isn't available" in msg:
                 return {'error': 'Видео приватное или недоступно'}
-            if 'needs to be reloaded' in msg:
-                return {'error': 'YouTube заблокировал запрос'}
+            if 'needs to be reloaded' in msg or '403' in msg or 'Forbidden' in msg:
+                return {'error': 'YouTube блокирует запросы с этого сервера (HTTP 403). Попробуйте через прокси/VPN или другой сервер.'}
             if 'timed out' in msg.lower():
                 return {'error': 'Таймаут соединения'}
             return {'error': f'Ошибка: {msg[:200]}'}
