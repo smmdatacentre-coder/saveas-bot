@@ -583,6 +583,26 @@ def download_tt_carousel(url):
             except Exception as e:
                 logger.error(f"TT gallery-dl fallback: {e}")
 
+        # TikTok may block a server IP. TikWM returns signed image URLs for
+        # photo posts without relying on TikTok's page HTML.
+        if not photos:
+            try:
+                api_response = requests.get(
+                    'https://www.tikwm.com/api/', params={'url': url}, timeout=30
+                )
+                api_data = api_response.json()
+                item = api_data.get('data', {}) if api_data.get('code') == 0 else {}
+                caption = item.get('title', '') or caption
+                for i, image_url in enumerate(item.get('images', [])):
+                    image_response = requests.get(image_url, timeout=60)
+                    if image_response.status_code == 200:
+                        fp = os.path.join(tmp_dir, f"tikwm_{i}.jpg")
+                        with open(fp, 'wb') as f:
+                            f.write(image_response.content)
+                        photos.append(fp)
+            except Exception as e:
+                logger.error(f"TT TikWM fallback: {e}")
+
         # Fallback: try yt-dlp for single videos.
         if not photos:
             try:
