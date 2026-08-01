@@ -790,7 +790,49 @@ def download_x_media(url):
                 'caption': description[:1024],
             }
     except Exception as e:
-        logger.error(f"X/Twitter download error: {e}", exc_info=True)
+        logger.error(f"X/Twitter yt-dlp error: {e}")
+
+    logger.info(f"yt-dlp failed for X, trying page scrape...")
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        resp = requests.get(url, headers=headers, timeout=30)
+        html = resp.text
+        description = ''
+        og_desc = re.search(r'<meta\s+property="og:description"\s+content="([^"]*)"', html)
+        if og_desc:
+            description = og_desc.group(1)
+        else:
+            tw_desc = re.search(r'<meta\s+name="description"\s+content="([^"]*)"', html)
+            if tw_desc:
+                description = tw_desc.group(1)
+        img_urls = re.findall(r'https://pbs\.twimg\.com/media/[^\s"\'<>]+', html)
+        img_urls = list(dict.fromkeys(img_urls))
+        if not img_urls:
+            img_urls = re.findall(r'https://pbs\.twimg\.com/ext_tw_video/[^\s"\'<>]+', html)
+        files = []
+        for i, img_url in enumerate(img_urls[:10]):
+            clean_url = img_url.split('?')[0]
+            if not clean_url.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+                clean_url += '.jpg'
+            try:
+                dr = requests.get(clean_url, headers=headers, timeout=30)
+                if dr.status_code == 200:
+                    fp = os.path.join(tmp_dir, f"x_{i}.jpg")
+                    with open(fp, 'wb') as f:
+                        f.write(dr.content)
+                    if os.path.getsize(fp) > 0:
+                        files.append(fp)
+            except Exception as e:
+                logger.error(f"X photo download [{i}]: {e}")
+        if files:
+            return {
+                'type': 'photos',
+                'files': files,
+                'caption': description[:1024],
+            }
+    except Exception as e:
+        logger.error(f"X/Twitter scrape error: {e}", exc_info=True)
+
     return {'type': 'error', 'error': 'Не удалось скачать из X/Twitter'}
 
 
@@ -842,6 +884,11 @@ def download_video(task, msg_ref, loop, queue=None):
                     title = info.get('title', '')
                     vid_id = info.get('id', '')
                 tracker.title = title[:40] if title else ''
+
+                dl_dir = DOWNLOAD_DIR
+
+                ffmpeg_location = get_ffmpeg_location()
+                download_clients = [None, ['web'], ['mweb'], ['android']]
 
                 if getattr(task, 'audio_only', False):
                     mp3_opts = {
