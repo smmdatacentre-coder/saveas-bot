@@ -53,7 +53,8 @@ def get_instagram_cookiefile():
     if not encoded:
         return None
     try:
-        data = base64.b64decode(encoded).decode('utf-8')
+        encoded += '=' * (-len(encoded) % 4)
+        data = base64.urlsafe_b64decode(encoded).decode('utf-8')
         cookiefile = os.path.join('/tmp', 'instagram_cookies.txt')
         with open(cookiefile, 'w', encoding='utf-8') as f:
             f.write(data)
@@ -561,7 +562,25 @@ def download_tt_carousel(url):
                 except json.JSONDecodeError as e:
                     logger.error(f"TT carousel SIGI JSON error: {e}")
 
-        # Fallback: try yt-dlp for the URL (some may work)
+        # gallery-dl supports TikTok photo URLs that yt-dlp rejects.
+        if not photos:
+            try:
+                result = subprocess.run(
+                    [sys.executable, '-m', 'gallery_dl', '-d', tmp_dir, url],
+                    capture_output=True, text=True, timeout=90
+                )
+                if result.returncode:
+                    logger.error(f"TT gallery-dl error: {result.stderr[-500:]}")
+                for root, dirs, files in os.walk(tmp_dir):
+                    for fn in sorted(files):
+                        fp = os.path.join(root, fn)
+                        if (fp.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.mp4', '.mov', '.webm'))
+                                and os.path.getsize(fp) > 0):
+                            photos.append(fp)
+            except Exception as e:
+                logger.error(f"TT gallery-dl fallback: {e}")
+
+        # Fallback: try yt-dlp for single videos.
         if not photos:
             try:
                 opts = {
