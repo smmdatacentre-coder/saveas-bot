@@ -4,6 +4,7 @@ import glob
 import time
 import json
 import uuid
+import base64
 import subprocess
 import logging
 import asyncio
@@ -40,6 +41,25 @@ def get_ffmpeg_path():
 def get_ffmpeg_location():
     ffmpeg_path = get_ffmpeg_path()
     return os.path.dirname(ffmpeg_path) if os.path.sep in ffmpeg_path else None
+
+
+def get_instagram_cookiefile():
+    cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
+    if os.path.exists(cookiefile):
+        return cookiefile
+
+    encoded = os.environ.get('INSTAGRAM_COOKIES_B64', '').strip()
+    if not encoded:
+        return None
+    try:
+        data = base64.b64decode(encoded).decode('utf-8')
+        cookiefile = os.path.join('/tmp', 'instagram_cookies.txt')
+        with open(cookiefile, 'w', encoding='utf-8') as f:
+            f.write(data)
+        return cookiefile
+    except Exception as e:
+        logger.error(f'Instagram cookies decode error: {e}')
+        return None
 
 
 def get_token():
@@ -362,9 +382,28 @@ def download_ig_post(url):
 
     if not photos:
         try:
-            cookies_file = os.path.join(BOT_DIR, 'cookies.txt')
+            # Instagram API can reject the request even when yt-dlp can extract the media.
+            ydl_opts = make_ydl_opts()
+            ydl_opts['outtmpl'] = os.path.join(tmp_dir, '%(id)s.%(ext)s')
+            ydl_opts['format'] = 'best[ext=mp4]/best'
+            cookies_file = get_instagram_cookiefile()
+            if cookies_file:
+                ydl_opts['cookiefile'] = cookies_file
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if info:
+                    title = info.get('title', '') or caption
+                    for fp in glob.glob(os.path.join(tmp_dir, f"{info.get('id', '')}.*")):
+                        if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                            photos.append(fp)
+        except Exception as e:
+            logger.error(f"Instagram yt-dlp fallback error: {e}")
+
+    if not photos:
+        try:
+            cookies_file = get_instagram_cookiefile()
             cmd = ['python3', '-m', 'gallery_dl']
-            if os.path.exists(cookies_file):
+            if cookies_file:
                 cmd += ['--cookies', cookies_file]
             cmd += ['-d', tmp_dir, url]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -540,8 +579,8 @@ def download_video(task, msg_ref, loop, queue=None):
         elif platform == 'vk':
             opts['format'] = quality or 'best'
         elif platform == 'instagram':
-            cookies_file = os.path.join(BOT_DIR, 'cookies.txt')
-            if os.path.exists(cookies_file):
+            cookies_file = get_instagram_cookiefile()
+            if cookies_file:
                 opts['cookiefile'] = cookies_file
             opts['format'] = quality or 'b/best'
         elif platform == 'tiktok':
@@ -671,8 +710,8 @@ def download_video_raw(url, quality=None):
         opts['extractor_args'] = {'youtube': {'player_client': ['android_vr']}}
         opts['format'] = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best'
     elif platform == 'instagram':
-        cookies_file = os.path.join(BOT_DIR, 'cookies.txt')
-        if os.path.exists(cookies_file):
+        cookies_file = get_instagram_cookiefile()
+        if cookies_file:
             opts['cookiefile'] = cookies_file
         opts['format'] = quality or 'best'
     else:
@@ -930,7 +969,9 @@ async def process_queue(chat_id, bot, loop):
                                 logger.error(f"IG send [{i}] error: {e}")
                                 await asyncio.sleep(1)
                     else:
-                        raise RuntimeError('Не удалось скачать Instagram-сообщение')
+                        if not get_instagram_cookiefile():
+                            raise RuntimeError('Instagram требует cookies авторизованного аккаунта')
+                        raise RuntimeError('Instagram не отдал медиа даже с cookies')
 
                     queue.pop(0)
                     await update_status(build_queue_text(queue))
