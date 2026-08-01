@@ -629,6 +629,59 @@ def download_tt_carousel(url):
     return photos, caption, tmp_dir
 
 
+def download_tt_media(url):
+    """Unified TikTok downloader: uses TikWM API for both carousels and videos."""
+    tmp_dir = os.path.join(DOWNLOAD_DIR, f"tt_{uuid.uuid4().hex[:8]}")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    try:
+        api_resp = requests.get('https://www.tikwm.com/api/', params={'url': url}, timeout=30)
+        api_data = api_resp.json()
+        if api_data.get('code') != 0:
+            return {'type': 'error', 'error': 'TikWM API error'}
+
+        item = api_data.get('data', {})
+        title = item.get('title', '')
+        images = item.get('images', [])
+        play_url = item.get('play', '')
+
+        if images:
+            photos = []
+            for i, img_url in enumerate(images):
+                try:
+                    dr = requests.get(img_url, timeout=60)
+                    if dr.status_code == 200:
+                        fp = os.path.join(tmp_dir, f"tikwm_{i}.jpg")
+                        with open(fp, 'wb') as f:
+                            f.write(dr.content)
+                        photos.append(fp)
+                except Exception as e:
+                    logger.error(f"TikWM carousel download [{i}]: {e}")
+            return {'type': 'carousel', 'photos': photos, 'caption': title}
+
+        if play_url:
+            try:
+                dr = requests.get(play_url, timeout=120)
+                if dr.status_code == 200:
+                    fp = os.path.join(tmp_dir, f"tikwm_{item.get('id', 'video')}.mp4")
+                    with open(fp, 'wb') as f:
+                        f.write(dr.content)
+                    if os.path.getsize(fp) > 0:
+                        return {
+                            'type': 'video',
+                            'filename': fp,
+                            'title': title,
+                            'filesize': os.path.getsize(fp),
+                        }
+            except Exception as e:
+                logger.error(f"TikWM video download error: {e}")
+
+    except Exception as e:
+        logger.error(f"TikWM API error: {e}")
+
+    return {'type': 'error', 'error': 'Не удалось скачать TikTok'}
+
+
 def download_video(task, msg_ref, loop, queue=None):
     url = task.url
     quality = task.quality
@@ -644,7 +697,7 @@ def download_video(task, msg_ref, loop, queue=None):
             opts['extractor_args'] = {'youtube': {'player_client': ['android_vr']}}
             opts['skip_download'] = True
         elif platform == 'vk':
-            opts['format'] = quality or 'best'
+            opts['format'] = quality or 'best[ext=mp4][acodec!=none]/best[ext=mp4]/best'
         elif platform == 'instagram':
             cookies_file = get_instagram_cookiefile()
             if cookies_file:
@@ -976,30 +1029,70 @@ async def process_queue(chat_id, bot, loop):
                     task.status = 'downloading'
                     await update_status(build_queue_text(queue))
 
-                    photos, caption, tt_tmp_dir = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: download_tt_carousel(task.url)
+                    tt_result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: download_tt_media(task.url)
                     )
 
-                    if photos:
-                        task.status = 'done'
-                        task.result = {'photos': photos}
-                        caption_text = caption.strip() if caption else ''
-                        for i, fpath in enumerate(photos):
-                            try:
-                                cap = caption_text[:1024] if (i == 0 and caption_text) else None
-                                is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
-                                fobj = FSInputFile(fpath)
-                                if is_video:
-                                    await bot.send_video(chat_id=chat_id, video=fobj, caption=cap)
+                    if tt_result.get('type') == 'video':
+                        fn = tt_result['filename']
+                        try:
+                            is_high = tt_result.get('filesize', 0) > 50 * 1024 * 1024
+                            if is_high:
+                                link = await asyncio.get_event_loop().run_in_executor(
+                                    None, lambda: upload_to_hosting(fn)
+                                )
+                                if link:
+                                    text = (
+                                        f"🎬 <b>{tt_result.get('title', '')}</b>\n"
+                                        f"📦 {format_size(tt_result['filesize'])}\n\n"
+                                        f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
+                                        f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
+                                    )
+                                    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                                 else:
-                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
-                                if i < len(photos) - 1:
-                                    await asyncio.sleep(0.5)
-                            except Exception as e:
-                                logger.error(f"TT carousel send [{i}] error: {e}")
-                                await asyncio.sleep(1)
+                                    await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг.")
+                            else:
+                                video_file = FSInputFile(fn)
+                                w, h = extract_video_dimensions(fn)
+                                send_kwargs = dict(
+                                    chat_id=chat_id, video=video_file,
+                                    caption=f"🎬 {tt_result.get('title', '')[:80]}"
+                                )
+                                if w and h:
+                                    send_kwargs['width'] = w
+                                    send_kwargs['height'] = h
+                                await bot.send_video(**send_kwargs)
+                        except Exception as e:
+                            await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}")
+                        finally:
+                            if os.path.exists(fn):
+                                os.remove(fn)
+
+                    elif tt_result.get('type') == 'carousel':
+                        photos = tt_result.get('photos', [])
+                        caption = tt_result.get('caption', '')
+                        if photos:
+                            task.status = 'done'
+                            task.result = {'photos': photos}
+                            caption_text = caption.strip() if caption else ''
+                            for i, fpath in enumerate(photos):
+                                try:
+                                    cap = caption_text[:1024] if (i == 0 and caption_text) else None
+                                    is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
+                                    fobj = FSInputFile(fpath)
+                                    if is_video:
+                                        await bot.send_video(chat_id=chat_id, video=fobj, caption=cap)
+                                    else:
+                                        await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                                    if i < len(photos) - 1:
+                                        await asyncio.sleep(0.5)
+                                except Exception as e:
+                                    logger.error(f"TT carousel send [{i}] error: {e}")
+                                    await asyncio.sleep(1)
+                        else:
+                            raise RuntimeError('Не удалось извлечь медиа из TikTok')
                     else:
-                        raise RuntimeError('Не удалось извлечь медиа из TikTok')
+                        raise RuntimeError(tt_result.get('error', 'Не удалось извлечь медиа из TikTok'))
 
                     queue.pop(0)
                     await update_status(build_queue_text(queue))
