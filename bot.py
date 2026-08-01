@@ -319,6 +319,26 @@ def download_ig_post(url):
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"ig_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
 
+    if '/p/' in url.lower():
+        try:
+            cookies_file = get_instagram_cookiefile()
+            cmd = [sys.executable, '-m', 'gallery_dl']
+            if cookies_file:
+                cmd += ['--cookies', cookies_file]
+            cmd += ['-d', tmp_dir, url]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode:
+                logger.error(f"Instagram gallery-dl error: {result.stderr[-500:]}")
+            for root, dirs, files in os.walk(tmp_dir):
+                for fn in sorted(files):
+                    fp = os.path.join(root, fn)
+                    if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                        photos.append(fp)
+            if photos:
+                return photos, caption, tmp_dir
+        except Exception as e:
+            logger.error(f"Instagram gallery-dl carousel error: {e}")
+
     shortcode = _extract_ig_shortcode(url)
     if not shortcode:
         m = re.search(r'instagram\.com/(?:reel|tv)/([^/?]+)', url)
@@ -410,6 +430,8 @@ def download_ig_post(url):
                 cmd += ['--cookies', cookies_file]
             cmd += ['-d', tmp_dir, url]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if result.returncode:
+                logger.error(f"Instagram gallery-dl error: {result.stderr[-500:]}")
             for root, dirs, files in os.walk(tmp_dir):
                 for fn in sorted(files):
                     fp = os.path.join(root, fn)
