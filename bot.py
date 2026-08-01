@@ -1306,6 +1306,8 @@ async def process_queue(chat_id, bot, loop):
                             os.remove(result['thumb'])
                 queue.pop(0)
                 await update_status(build_queue_text(queue))
+                if queue:
+                    await asyncio.sleep(2)
 
             except Exception as e:
                 logger.error(f"Queue worker error for chat {chat_id}: {e}")
