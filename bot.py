@@ -5,6 +5,7 @@ import time
 import json
 import uuid
 import base64
+import zlib
 import subprocess
 import sys
 import logging
@@ -54,10 +55,12 @@ def get_instagram_cookiefile():
         return None
     try:
         encoded += '=' * (-len(encoded) % 4)
-        data = base64.urlsafe_b64decode(encoded).decode('utf-8')
+        data = base64.urlsafe_b64decode(encoded)
+        if data.startswith(b'x\x9c') or data.startswith(b'x\xda'):
+            data = zlib.decompress(data)
         cookiefile = os.path.join('/tmp', 'instagram_cookies.txt')
         with open(cookiefile, 'w', encoding='utf-8') as f:
-            f.write(data)
+            f.write(data.decode('utf-8'))
         return cookiefile
     except Exception as e:
         logger.error(f'Instagram cookies decode error: {e}')
