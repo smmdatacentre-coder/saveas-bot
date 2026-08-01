@@ -6,6 +6,7 @@ import json
 import uuid
 import base64
 import subprocess
+import sys
 import logging
 import asyncio
 import shutil
@@ -380,7 +381,9 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"IG API error: {e}")
 
-    if not photos:
+    # A /p/ URL can be a carousel. yt-dlp treats it as a video playlist and
+    # fails on image-only entries, so let gallery-dl handle posts directly.
+    if not photos and '/p/' not in url.lower():
         try:
             # Instagram API can reject the request even when yt-dlp can extract the media.
             ydl_opts = make_ydl_opts()
@@ -402,7 +405,7 @@ def download_ig_post(url):
     if not photos:
         try:
             cookies_file = get_instagram_cookiefile()
-            cmd = ['python3', '-m', 'gallery_dl']
+            cmd = [sys.executable, '-m', 'gallery_dl']
             if cookies_file:
                 cmd += ['--cookies', cookies_file]
             cmd += ['-d', tmp_dir, url]
