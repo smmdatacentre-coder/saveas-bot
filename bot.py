@@ -402,6 +402,7 @@ def download_ig_post(url):
                             if ct == 2:
                                 vids = c.get('video_versions', [])
                                 if vids:
+                                    vids.sort(key=lambda v: v.get('width', 0) * v.get('height', 0), reverse=True)
                                     dl_url = vids[0]['url']
                                     ext = 'mp4'
                                 else:
@@ -425,6 +426,7 @@ def download_ig_post(url):
                     elif media_type == 2:
                         vids = item.get('video_versions', [])
                         if vids:
+                            vids.sort(key=lambda v: v.get('width', 0) * v.get('height', 0), reverse=True)
                             dr = requests.get(vids[0]['url'], timeout=120, headers={'User-Agent': 'Instagram 301.0.0.27.98'})
                             if dr.status_code == 200:
                                 fp = os.path.join(tmp_dir, "0.mp4")
