@@ -3,7 +3,6 @@ __pycache__
 *.pyc
 .env
 cookies.txt
-welcome.png
 ffmpeg
 *.log
 .DS_Store

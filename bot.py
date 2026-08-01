@@ -7,6 +7,7 @@ import uuid
 import subprocess
 import logging
 import asyncio
+import shutil
 import requests
 import yt_dlp
 from bs4 import BeautifulSoup
@@ -26,6 +27,19 @@ os.environ['PATH'] = BOT_DIR + ':' + os.environ.get('PATH', '')
 user_queues = {}
 user_locks = {}
 pending_yt = {}
+queue_workers = {}
+
+
+def get_ffmpeg_path():
+    bundled = os.path.join(BOT_DIR, 'ffmpeg')
+    if os.path.exists(bundled) and os.access(bundled, os.X_OK):
+        return bundled
+    return shutil.which('ffmpeg') or 'ffmpeg'
+
+
+def get_ffmpeg_location():
+    ffmpeg_path = get_ffmpeg_path()
+    return os.path.dirname(ffmpeg_path) if os.path.sep in ffmpeg_path else None
 
 
 def get_token():
@@ -165,13 +179,15 @@ def make_ydl_opts(fmt=None, quality=None):
         'noplaylist': True,
         'no_warnings': True,
         'quiet': True,
-        'ffmpeg_location': BOT_DIR,
         'socket_timeout': 120,
         'retries': 10,
         'fragment_retries': 10,
         'http_chunk_size': 2097152,
         'no_check_certificates': True,
     }
+    ffmpeg_location = get_ffmpeg_location()
+    if ffmpeg_location:
+        base['ffmpeg_location'] = ffmpeg_location
     if fmt:
         base['format'] = fmt
     if quality:
@@ -512,7 +528,7 @@ def download_video(task, msg_ref, loop, queue=None):
     platform = detect_platform(url)
     url_type = detect_url_type(url)
     max_retries = 2
-    ffmpeg_path = os.path.join(BOT_DIR, 'ffmpeg')
+    ffmpeg_path = get_ffmpeg_path()
 
     for attempt in range(max_retries + 1):
         opts = make_ydl_opts()
@@ -556,6 +572,7 @@ def download_video(task, msg_ref, loop, queue=None):
                 dl_dir = DOWNLOAD_DIR
 
                 if is_short:
+                    ffmpeg_location = get_ffmpeg_location()
                     dl_opts = {
                         'extractor_args': {'youtube': {'player_client': ['android_vr']}},
                         'format': 'bestvideo[height<=1080][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best',
@@ -565,11 +582,13 @@ def download_video(task, msg_ref, loop, queue=None):
                         'quiet': True,
                         'no_warnings': True,
                         'socket_timeout': 30,
-                        'ffmpeg_location': BOT_DIR,
                         'progress_hooks': [tracker.hook],
                     }
+                    if ffmpeg_location:
+                        dl_opts['ffmpeg_location'] = ffmpeg_location
                 elif quality:
                     h = int(quality.replace('p', ''))
+                    ffmpeg_location = get_ffmpeg_location()
                     dl_opts = {
                         'extractor_args': {'youtube': {'player_client': ['android_vr']}},
                         'format': f'bestvideo[height<={h}][ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[height<={h}]+bestaudio/bestvideo+bestaudio/best',
@@ -579,9 +598,10 @@ def download_video(task, msg_ref, loop, queue=None):
                         'quiet': True,
                         'no_warnings': True,
                         'socket_timeout': 30,
-                        'ffmpeg_location': BOT_DIR,
                         'progress_hooks': [tracker.hook],
                     }
+                    if ffmpeg_location:
+                        dl_opts['ffmpeg_location'] = ffmpeg_location
                 with yt_dlp.YoutubeDL(dl_opts) as ydl:
                     ydl.download([url])
                 tracker.done()
@@ -683,7 +703,7 @@ def remux_mp4(filepath):
         return filepath
     out = filepath + '.fixed.mp4'
     try:
-        ffmpeg_path = os.path.join(BOT_DIR, 'ffmpeg')
+        ffmpeg_path = get_ffmpeg_path()
         proc = subprocess.run(
             [ffmpeg_path, '-y', '-i', filepath, '-c', 'copy',
              '-movflags', '+faststart', out],
@@ -710,7 +730,7 @@ def extract_thumbnail(filepath):
         return None
     thumb_path = filepath + '.thumb.jpg'
     try:
-        ffmpeg_path = os.path.join(BOT_DIR, 'ffmpeg')
+        ffmpeg_path = get_ffmpeg_path()
         proc = subprocess.run(
             [ffmpeg_path, '-y', '-i', filepath, '-ss', '00:00:01', '-vframes', '1',
              '-vf', 'scale=320:-1', thumb_path],
@@ -730,7 +750,7 @@ def extract_thumbnail(filepath):
 
 def extract_video_dimensions(filepath):
     try:
-        ffmpeg_path = os.path.join(BOT_DIR, 'ffmpeg')
+        ffmpeg_path = get_ffmpeg_path()
         r = subprocess.run([ffmpeg_path, '-i', filepath], capture_output=True, text=True, timeout=10)
         for line in r.stderr.split('\n'):
             m = re.search(r'(\d+)x(\d+)', line)
@@ -1072,6 +1092,22 @@ async def process_queue(chat_id, bot, loop):
         user_queues.pop(chat_id, None)
 
 
+def ensure_queue_worker(chat_id, bot, loop):
+    worker = queue_workers.get(chat_id)
+    if worker and not worker.done():
+        return worker
+
+    worker = asyncio.create_task(process_queue(chat_id, bot, loop))
+    queue_workers[chat_id] = worker
+
+    def _cleanup(_task):
+        if queue_workers.get(chat_id) is _task:
+            queue_workers.pop(chat_id, None)
+
+    worker.add_done_callback(_cleanup)
+    return worker
+
+
 async def main():
     token = get_token()
     if not token:
@@ -1186,8 +1222,8 @@ async def main():
         if added > 0:
             await message.answer(f"✅ Добавлено в очередь ({added} шт.)")
 
-        if added > 0 and not user_locks[chat_id].locked():
-            asyncio.create_task(process_queue(chat_id, bot, loop))
+        if added > 0:
+            ensure_queue_worker(chat_id, bot, loop)
 
     @dp.callback_query(F.data.startswith('ytq_'))
     async def handle_yt_quality(callback: CallbackQuery):
@@ -1220,8 +1256,7 @@ async def main():
 
         pending_yt.pop(str(chat_id), None)
 
-        if not user_locks[chat_id].locked():
-            asyncio.create_task(process_queue(chat_id, bot, loop))
+        ensure_queue_worker(chat_id, bot, loop)
 
     print("🚀 Бот запущен!")
     await dp.start_polling(bot)
