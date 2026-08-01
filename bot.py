@@ -899,15 +899,15 @@ def download_video(task, msg_ref, loop, queue=None):
                         'no_warnings': True,
                         'socket_timeout': 30,
                         'progress_hooks': [tracker.hook],
-                        'postprocessors': [{
-                            'key': 'FFmpegExtractAudio',
-                            'preferredcodec': 'mp3',
-                            'preferredquality': '320',
-                        }],
                     }
                     ffmpeg_location = get_ffmpeg_location()
                     if ffmpeg_location:
                         mp3_opts['ffmpeg_location'] = ffmpeg_location
+                        mp3_opts['postprocessors'] = [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '320',
+                        }]
                     for cli_idx, client in enumerate(download_clients):
                         try:
                             mp3_dl = dict(mp3_opts)
@@ -925,7 +925,7 @@ def download_video(task, msg_ref, loop, queue=None):
                     if not fn_list:
                         return {'error': 'Файл не найден'}
                     fn = fn_list[0]
-                    if not fn.endswith('.mp3'):
+                    if ffmpeg_location and not fn.endswith('.mp3'):
                         os.rename(fn, fn.rsplit('.', 1)[0] + '.mp3')
                         fn = fn.rsplit('.', 1)[0] + '.mp3'
                     return {
@@ -1317,20 +1317,33 @@ async def process_queue(chat_id, bot, loop):
                     if x_result.get('type') in ('video', 'photos'):
                         files = x_result.get('files', [])
                         caption = x_result.get('caption', '')
-                        for i, fpath in enumerate(files):
+                        photos = [f for f in files if not f.lower().endswith(('.mp4', '.webm', '.mov'))]
+                        videos = [f for f in files if f.lower().endswith(('.mp4', '.webm', '.mov'))]
+                        if photos:
                             try:
-                                cap = caption[:1024] if (i == 0 and caption) else None
-                                is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
-                                fobj = FSInputFile(fpath)
-                                if is_video:
-                                    await bot.send_video(chat_id=chat_id, video=fobj, caption=cap)
-                                else:
-                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
-                                if i < len(files) - 1:
-                                    await asyncio.sleep(0.5)
+                                media_group = []
+                                for i, fpath in enumerate(photos):
+                                    fobj = FSInputFile(fpath)
+                                    from aiogram.types import InputMediaPhoto
+                                    cap = caption[:1024] if (i == 0 and caption) else None
+                                    media_group.append(InputMediaPhoto(media=fobj, caption=cap))
+                                if media_group:
+                                    await bot.send_media_group(chat_id=chat_id, media=media_group)
                             except Exception as e:
-                                logger.error(f"X send [{i}] error: {e}")
-                                await asyncio.sleep(1)
+                                logger.error(f"X photos album error: {e}")
+                                for fpath in photos:
+                                    try:
+                                        fobj = FSInputFile(fpath)
+                                        await bot.send_photo(chat_id=chat_id, photo=fobj, caption=caption[:1024] if caption else None)
+                                        await asyncio.sleep(0.5)
+                                    except Exception:
+                                        pass
+                        for fpath in videos:
+                            try:
+                                fobj = FSInputFile(fpath)
+                                await bot.send_document(chat_id=chat_id, document=fobj, caption=caption[:1024] if caption else None)
+                            except Exception as e:
+                                logger.error(f"X video send error: {e}")
                         task.status = 'done'
                         task.result = {'photos': files}
                     else:
@@ -1360,7 +1373,7 @@ async def process_queue(chat_id, bot, loop):
                                 fobj = FSInputFile(fpath)
                                 thumb_obj = FSInputFile(thumb_path) if thumb_path else None
                                 if is_video:
-                                    await bot.send_video(chat_id=chat_id, video=fobj, caption=cap, thumbnail=thumb_obj)
+                                    await bot.send_document(chat_id=chat_id, document=fobj, caption=cap)
                                 else:
                                     await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
                                 if thumb_path and os.path.exists(thumb_path):
