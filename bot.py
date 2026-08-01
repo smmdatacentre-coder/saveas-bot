@@ -661,11 +661,12 @@ def download_tt_media(url):
 
         if play_url:
             try:
-                dr = requests.get(play_url, timeout=120)
+                dr = requests.get(play_url, timeout=180, stream=True)
                 if dr.status_code == 200:
                     fp = os.path.join(tmp_dir, f"tikwm_{item.get('id', 'video')}.mp4")
                     with open(fp, 'wb') as f:
-                        f.write(dr.content)
+                        for chunk in dr.iter_content(chunk_size=8192):
+                            f.write(chunk)
                     if os.path.getsize(fp) > 0:
                         return {
                             'type': 'video',
@@ -677,7 +678,36 @@ def download_tt_media(url):
                 logger.error(f"TikWM video download error: {e}")
 
     except Exception as e:
-        logger.error(f"TikWM API error: {e}")
+        logger.error(f"TikWM API error: {e}", exc_info=True)
+
+    logger.info(f"TikWM failed for {url}, trying yt-dlp...")
+    try:
+        import glob as g
+        vid = url.rstrip('/').split('/')[-1].split('?')[0]
+        ydl_opts = {
+            'format': 'best[ext=mp4]/best',
+            'outtmpl': os.path.join(tmp_dir, f'{vid}.%(ext)s'),
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'socket_timeout': 30,
+        }
+        ffmpeg_location = get_ffmpeg_location()
+        if ffmpeg_location:
+            ydl_opts['ffmpeg_location'] = ffmpeg_location
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+        fn_list = g.glob(os.path.join(tmp_dir, f'{vid}.*'))
+        if fn_list:
+            fp = fn_list[0]
+            return {
+                'type': 'video',
+                'filename': fp,
+                'title': (info.get('title', '') if info else '') or 'TikTok',
+                'filesize': os.path.getsize(fp),
+            }
+    except Exception as e:
+        logger.error(f"TikTok yt-dlp fallback error: {e}", exc_info=True)
 
     return {'type': 'error', 'error': 'Не удалось скачать TikTok'}
 
@@ -694,7 +724,6 @@ def download_video(task, msg_ref, loop, queue=None):
         opts = make_ydl_opts()
 
         if platform == 'youtube':
-            opts['extractor_args'] = {'youtube': {'player_client': ['android_vr']}}
             opts['skip_download'] = True
         elif platform == 'vk':
             opts['format'] = quality or 'best[ext=mp4][acodec!=none]/best[ext=mp4]/best'
@@ -732,36 +761,38 @@ def download_video(task, msg_ref, loop, queue=None):
                 dl_dir = DOWNLOAD_DIR
 
                 if is_short:
-                    ffmpeg_location = get_ffmpeg_location()
-                    dl_opts = {
-                        'extractor_args': {'youtube': {'player_client': ['android_vr']}},
-                        'format': 'best[height<=1080][ext=mp4][vcodec!=none][acodec!=none]/best[height<=1080][ext=mp4]/best[height<=1080]/best',
-                        'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
-                        'noplaylist': True,
-                        'quiet': True,
-                        'no_warnings': True,
-                        'socket_timeout': 30,
-                        'progress_hooks': [tracker.hook],
-                    }
-                    if ffmpeg_location:
-                        dl_opts['ffmpeg_location'] = ffmpeg_location
+                    dl_format = 'best[height<=1080][ext=mp4][vcodec!=none][acodec!=none]/best[height<=1080][ext=mp4]/best[height<=1080]/best'
                 elif quality:
                     h = int(quality.replace('p', ''))
-                    ffmpeg_location = get_ffmpeg_location()
-                    dl_opts = {
-                        'extractor_args': {'youtube': {'player_client': ['android_vr']}},
-                        'format': f'best[height<={h}][ext=mp4][vcodec!=none][acodec!=none]/best[height<={h}][ext=mp4]/best[height<={h}]/best',
-                        'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
-                        'noplaylist': True,
-                        'quiet': True,
-                        'no_warnings': True,
-                        'socket_timeout': 30,
-                        'progress_hooks': [tracker.hook],
-                    }
-                    if ffmpeg_location:
-                        dl_opts['ffmpeg_location'] = ffmpeg_location
-                with yt_dlp.YoutubeDL(dl_opts) as ydl:
-                    ydl.download([url])
+                    dl_format = f'best[height<={h}][ext=mp4][vcodec!=none][acodec!=none]/best[height<={h}][ext=mp4]/best[height<={h}]/best'
+                else:
+                    dl_format = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best'
+
+                ffmpeg_location = get_ffmpeg_location()
+                download_clients = [None, ['web'], ['mweb'], ['android']]
+                for cli_idx, client in enumerate(download_clients):
+                    try:
+                        dl_opts = {
+                            'format': dl_format,
+                            'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
+                            'noplaylist': True,
+                            'quiet': True,
+                            'no_warnings': True,
+                            'socket_timeout': 30,
+                            'progress_hooks': [tracker.hook],
+                        }
+                        if client:
+                            dl_opts['extractor_args'] = {'youtube': {'player_client': client}}
+                        if ffmpeg_location:
+                            dl_opts['ffmpeg_location'] = ffmpeg_location
+                        with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                            ydl.download([url])
+                        break
+                    except Exception as dl_err:
+                        logger.warning(f"YouTube client {client} failed: {dl_err}")
+                        if cli_idx == len(download_clients) - 1:
+                            raise
+                        continue
                 tracker.done()
 
                 fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
