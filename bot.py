@@ -83,8 +83,6 @@ def detect_url_type(url):
     if 'ok.ru' in u:
         return 'broken'
     if re.search(r'instagram\.com/p/', u) or re.search(r'instagram\.com/reel/', u):
-        if '/reel/' in u:
-            return 'video'
         return 'ig_post'
     if 'youtube.com' in u or 'youtu.be' in u:
         if '/shorts/' in u:
