@@ -894,7 +894,7 @@ def download_video(task, msg_ref, loop, queue=None):
 
                 if getattr(task, 'audio_only', False):
                     mp3_opts = {
-                        'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
+                        'format': 'bestaudio/best',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
                         'noplaylist': True,
                         'quiet': True,
@@ -902,6 +902,14 @@ def download_video(task, msg_ref, loop, queue=None):
                         'socket_timeout': 30,
                         'progress_hooks': [tracker.hook],
                     }
+                    ffmpeg_location = get_ffmpeg_location()
+                    if ffmpeg_location:
+                        mp3_opts['ffmpeg_location'] = ffmpeg_location
+                        mp3_opts['postprocessors'] = [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '320',
+                        }]
                     ffmpeg_location = get_ffmpeg_location()
                     if ffmpeg_location:
                         mp3_opts['ffmpeg_location'] = ffmpeg_location
