@@ -362,11 +362,12 @@ def download_ig_post(url):
 
     if not photos:
         try:
-            result = subprocess.run(
-                ['python3', '-m', 'gallery_dl', '--cookies', os.path.join(BOT_DIR, 'cookies.txt'),
-                 '-d', tmp_dir, url],
-                capture_output=True, text=True, timeout=60
-            )
+            cookies_file = os.path.join(BOT_DIR, 'cookies.txt')
+            cmd = ['python3', '-m', 'gallery_dl']
+            if os.path.exists(cookies_file):
+                cmd += ['--cookies', cookies_file]
+            cmd += ['-d', tmp_dir, url]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             for root, dirs, files in os.walk(tmp_dir):
                 for fn in sorted(files):
                     fp = os.path.join(root, fn)
