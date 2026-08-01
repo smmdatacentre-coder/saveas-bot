@@ -874,6 +874,166 @@ def download_youtube_cobalt(url, audio_only=False):
     return None
 
 
+INNERTUBE_CLIENTS = [
+    {
+        'clientName': 'ANDROID',
+        'clientVersion': '19.09.37',
+        'androidSdkVersion': 30,
+        'hl': 'en',
+        'gl': 'US',
+        'userAgent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip',
+        'api_key': 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+    },
+    {
+        'clientName': 'ANDROID_VR',
+        'clientVersion': '1.57.29',
+        'androidSdkVersion': 30,
+        'hl': 'en',
+        'gl': 'US',
+        'userAgent': 'com.google.android.apps.youtube.vr.oculus/1.57.29 (Linux; U; Android 12; eureka-user Build/SQ3A.220605.009.A1) gzip',
+        'api_key': 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+    },
+    {
+        'clientName': 'IOS',
+        'clientVersion': '19.09.3',
+        'deviceModel': 'iPhone14,3',
+        'hl': 'en',
+        'gl': 'US',
+        'userAgent': 'com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)',
+        'api_key': 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+    },
+    {
+        'clientName': 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+        'clientVersion': '2.0',
+        'hl': 'en',
+        'gl': 'US',
+        'userAgent': 'Mozilla/5.0',
+        'api_key': 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+    },
+]
+
+
+def _extract_youtube_id(url):
+    m = re.search(r'(?:v=|youtu\.be/|shorts/)([a-zA-Z0-9_-]{11})', url)
+    if m:
+        return m.group(1)
+    m = re.search(r'([a-zA-Z0-9_-]{11})', url)
+    if m:
+        return m.group(1)
+    return None
+
+
+def download_youtube_innertube(url, audio_only=False, quality=None):
+    """Download YouTube via innertube API — bypasses yt-dlp 403."""
+    vid_id = _extract_youtube_id(url)
+    if not vid_id:
+        return None
+
+    for client_cfg in INNERTUBE_CLIENTS:
+        try:
+            payload = {
+                'videoId': vid_id,
+                'context': {
+                    'client': {
+                        'clientName': client_cfg['clientName'],
+                        'clientVersion': client_cfg['clientVersion'],
+                        'hl': client_cfg.get('hl', 'en'),
+                        'gl': client_cfg.get('gl', 'US'),
+                    },
+                },
+                'contentCheckOk': True,
+                'racyCheckOk': True,
+            }
+            if 'androidSdkVersion' in client_cfg:
+                payload['context']['client']['androidSdkVersion'] = client_cfg['androidSdkVersion']
+            if 'deviceModel' in client_cfg:
+                payload['context']['client']['deviceModel'] = client_cfg['deviceModel']
+
+            resp = requests.post(
+                f'https://www.youtube.com/youtubei/v1/player?key={client_cfg["api_key"]}',
+                json=payload,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent': client_cfg['userAgent'],
+                    'X-YouTube-Client-Name': '3' if 'ANDROID' in client_cfg['clientName'] else '5',
+                    'X-YouTube-Client-Version': client_cfg['clientVersion'],
+                },
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                logger.warning(f"Innertube {client_cfg['clientName']} HTTP {resp.status_code}")
+                continue
+
+            data = resp.json()
+            status = data.get('playabilityStatus', {})
+            if status.get('status') != 'OK':
+                logger.warning(f"Innertube {client_cfg['clientName']} status: {status.get('status')} - {status.get('reason', '')[:100]}")
+                continue
+
+            title = data.get('videoDetails', {}).get('title', '')
+            streaming = data.get('streamingData', {})
+            formats = streaming.get('formats', []) + streaming.get('adaptiveFormats', [])
+
+            if not formats:
+                logger.warning(f"Innertube {client_cfg['clientName']}: no formats")
+                continue
+
+            if audio_only:
+                audio_fmts = [f for f in formats if f.get('mimeType', '').startswith('audio/')]
+                if not audio_fmts:
+                    logger.warning(f"Innertube {client_cfg['clientName']}: no audio formats")
+                    continue
+                audio_fmts.sort(key=lambda f: f.get('bitrate', 0), reverse=True)
+                chosen = audio_fmts[0]
+            else:
+                video_fmts = [f for f in formats if f.get('mimeType', '').startswith('video/')]
+                if quality:
+                    h = int(quality.replace('p', ''))
+                    video_fmts = [f for f in video_fmts if f.get('height', 0) <= h]
+                if not video_fmts:
+                    video_fmts = [f for f in formats if f.get('mimeType', '').startswith('video/')]
+                if not video_fmts:
+                    logger.warning(f"Innertube {client_cfg['clientName']}: no video formats")
+                    continue
+                video_fmts.sort(key=lambda f: (f.get('height', 0), f.get('bitrate', 0)), reverse=True)
+                chosen = video_fmts[0]
+
+            stream_url = chosen.get('url')
+            if not stream_url:
+                sig = chosen.get('signatureCipher', '')
+                if sig:
+                    logger.warning(f"Innertube {client_cfg['clientName']}: needs cipher, skipping")
+                    continue
+                logger.warning(f"Innertube {client_cfg['clientName']}: no url")
+                continue
+
+            tmp_dir = os.path.join(DOWNLOAD_DIR, f"yt_{uuid.uuid4().hex[:8]}")
+            os.makedirs(tmp_dir, exist_ok=True)
+            mime = chosen.get('mimeType', '')
+            ext = 'mp3' if audio_only else ('mp4' if 'video' in mime else 'webm')
+            if audio_only and 'webm' in mime:
+                ext = 'webm'
+            filepath = os.path.join(tmp_dir, f"{vid_id}.{ext}")
+
+            ua = client_cfg['userAgent']
+            dr = requests.get(stream_url, timeout=300, stream=True, headers={'User-Agent': ua})
+            if dr.status_code != 200:
+                logger.warning(f"Innertube {client_cfg['clientName']} download HTTP {dr.status_code}")
+                continue
+            with open(filepath, 'wb') as f:
+                for chunk in dr.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            if os.path.getsize(filepath) > 0:
+                logger.info(f"Innertube {client_cfg['clientName']} download success: {filepath}")
+                return filepath, title
+            os.remove(filepath)
+        except Exception as e:
+            logger.error(f"Innertube {client_cfg['clientName']} error: {e}")
+            continue
+
+    return None
+
+
 def download_video(task, msg_ref, loop, queue=None):
     url = task.url
     quality = task.quality
@@ -948,6 +1108,30 @@ def download_video(task, msg_ref, loop, queue=None):
                             break
                         except Exception as dl_err:
                             if cli_idx == len(download_clients) - 1:
+                                logger.warning("All yt-dlp MP3 clients failed, trying innertube API...")
+                                innertube_result = download_youtube_innertube(url, audio_only=True)
+                                if innertube_result:
+                                    fn, title = innertube_result
+                                    if not fn.lower().endswith('.mp3'):
+                                        audio_fn = fn.rsplit('.', 1)[0] + '.mp3'
+                                        proc = subprocess.run(
+                                            [ffmpeg_path, '-y', '-i', fn, '-vn',
+                                             '-acodec', 'libmp3lame', '-ab', '320k',
+                                             '-ar', '44100', audio_fn],
+                                            capture_output=True, text=True, timeout=300
+                                        )
+                                        if proc.returncode == 0 and os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
+                                            os.remove(fn)
+                                            fn = audio_fn
+                                    tracker.done()
+                                    return {
+                                        'filename': fn,
+                                        'title': title or 'Audio',
+                                        'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
+                                        'filesize': os.path.getsize(fn),
+                                        'description': ((info.get('description', '') or '')[:1000] if info else ''),
+                                        'audio_only': True,
+                                    }
                                 raise
                             continue
                     tracker.done()
@@ -1031,6 +1215,30 @@ def download_video(task, msg_ref, loop, queue=None):
                         last_err = dl_err
                         logger.warning(f"YouTube client {client} failed: {dl_err}")
                         if cli_idx == len(download_clients) - 1:
+                            logger.warning("All yt-dlp clients failed, trying innertube API...")
+                            innertube_result = download_youtube_innertube(url, audio_only=False, quality=quality)
+                            if innertube_result:
+                                fn, title = innertube_result
+                                if fn.endswith('.webm'):
+                                    remuxed = fn.rsplit('.', 1)[0] + '.mp4'
+                                    if ffmpeg_path and (os.path.exists(ffmpeg_path) or shutil.which('ffmpeg')):
+                                        proc = subprocess.run(
+                                            [ffmpeg_path, '-y', '-i', fn, '-c:v', 'libx264', '-c:a', 'aac', '-movflags', '+faststart', remuxed],
+                                            capture_output=True, text=True, timeout=300
+                                        )
+                                        if proc.returncode == 0 and os.path.exists(remuxed) and os.path.getsize(remuxed) > 0:
+                                            os.remove(fn)
+                                            fn = remuxed
+                                tracker.done()
+                                return {
+                                    'filename': fn,
+                                    'title': title,
+                                    'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
+                                    'filesize': os.path.getsize(fn),
+                                    'description': ((info.get('description', '') or '')[:1000] if info else ''),
+                                    'audio_only': False,
+                                    'duration': (info.get('duration', 0) if info else 0),
+                                }
                             raise
                         continue
                 else:
