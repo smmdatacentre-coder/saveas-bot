@@ -837,6 +837,9 @@ async def process_queue(chat_id, bot, loop):
                     await status_msg.delete()
                 except Exception:
                     pass
+                status_msg = None
+            if not text:
+                return
             try:
                 status_msg = await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
             except Exception:
@@ -859,194 +862,104 @@ async def process_queue(chat_id, bot, loop):
                 await update_status(build_queue_text(queue))
                 continue
 
-            if url_type == 'tt_carousel' or detect_platform(task.url) == 'tiktok':
-                task.status = 'downloading'
-                await update_status(build_queue_text(queue))
-
-                photos, caption, tt_tmp_dir = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: download_tt_carousel(task.url)
-                )
-
-                if photos:
-                    task.status = 'done'
-                    task.result = {'photos': photos}
-                    caption_text = caption.strip() if caption else ''
-                    for i, fpath in enumerate(photos):
-                        try:
-                            cap = caption_text[:1024] if (i == 0 and caption_text) else None
-                            is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
-                            fobj = FSInputFile(fpath)
-                            if is_video:
-                                await bot.send_video(chat_id=chat_id, video=fobj, caption=cap)
-                            else:
-                                await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
-                            if i < len(photos) - 1:
-                                await asyncio.sleep(0.5)
-                        except Exception as e:
-                            logger.error(f"TT carousel send [{i}] error: {e}")
-                            await asyncio.sleep(1)
-                else:
-                    # Fallback to yt-dlp for single videos
-                    msg_ref = [status_msg]
-                    try:
-                        result = await asyncio.wait_for(
-                            asyncio.get_event_loop().run_in_executor(
-                                None, lambda: download_video(task, msg_ref, loop, queue=queue)
-                            ),
-                            timeout=300
-                        )
-                    except asyncio.TimeoutError:
-                        result = {'error': 'Таймаут загрузки (5 мин)'}
-                    task.result = result
-                    if 'error' in result:
-                        task.status = 'error'
-                    else:
-                        task.status = 'done'
-                        task.filename = result['filename']
-
-                    if task.status == 'done' and result:
-                        try:
-                            is_high_quality = result['filesize'] > 50 * 1024 * 1024
-                            if is_high_quality:
-                                link = await asyncio.get_event_loop().run_in_executor(
-                                    None, lambda: upload_to_hosting(result['filename'])
-                                )
-                                if link:
-                                    text = (
-                                        f"🎬 <b>{result.get('title', '')}</b>\n"
-                                        f"📦 {format_size(result['filesize'])}\n\n"
-                                        f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
-                                        f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
-                                    )
-                                    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
-                                else:
-                                    await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг.")
-                            else:
-                                video_file = FSInputFile(result['filename'])
-                                w, h = extract_video_dimensions(result['filename'])
-                                send_kwargs = dict(chat_id=chat_id, video=video_file)
-                                if w and h:
-                                    send_kwargs['width'] = w
-                                    send_kwargs['height'] = h
-                                await bot.send_video(**send_kwargs)
-                        except Exception as e:
-                            try:
-                                await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}")
-                            except Exception:
-                                pass
-                        finally:
-                            if os.path.exists(result['filename']):
-                                os.remove(result['filename'])
-
-                queue.pop(0)
-                await update_status(build_queue_text(queue))
-                continue
-
-            if url_type == 'ig_post':
-                task.status = 'downloading'
-                await update_status(build_queue_text(queue))
-
-                photos, caption, ig_tmp_dir = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: download_ig_post(task.url)
-                )
-
-                if photos:
-                    task.status = 'done'
-                    task.result = {'photos': photos}
-                    caption_text = caption.strip() if caption else ''
-                    for i, fpath in enumerate(photos):
-                        try:
-                            cap = caption_text[:1024] if (i == 0 and caption_text) else None
-                            is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
-                            thumb_path = extract_thumbnail(fpath) if is_video else None
-                            fobj = FSInputFile(fpath)
-                            thumb_obj = FSInputFile(thumb_path) if thumb_path else None
-                            if is_video:
-                                await bot.send_video(chat_id=chat_id, video=fobj, caption=cap, thumbnail=thumb_obj)
-                            else:
-                                await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
-                            if thumb_path and os.path.exists(thumb_path):
-                                os.remove(thumb_path)
-                            if i < len(photos) - 1:
-                                await asyncio.sleep(0.5)
-                        except Exception as e:
-                            logger.error(f"IG send [{i}] error: {e}")
-                            await asyncio.sleep(1)
-                else:
-                    task.status = 'error'
-                    task.result = {'error': 'Фото не найдены'}
-
-                queue.pop(0)
-                await update_status(build_queue_text(queue))
-                continue
-
-            task.status = 'downloading'
-            await update_status(build_queue_text(queue))
-
-            msg_ref = [status_msg]
             try:
-                result = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(
-                        None, lambda: download_video(task, msg_ref, loop, queue=queue)
-                    ),
-                    timeout=300
-                )
-            except asyncio.TimeoutError:
-                result = {'error': 'Таймаут загрузки (5 мин)'}
-            task.result = result
+                if url_type == 'tt_carousel' or detect_platform(task.url) == 'tiktok':
+                    task.status = 'downloading'
+                    await update_status(build_queue_text(queue))
 
-            if 'error' in result:
-                task.status = 'error'
-            else:
-                task.status = 'done'
-                task.filename = result['filename']
+                    photos, caption, tt_tmp_dir = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: download_tt_carousel(task.url)
+                    )
 
-            if task.status == 'done' and result:
-                try:
-                    is_youtube = detect_platform(task.url) == 'youtube'
-                    is_short = '/shorts/' in task.url if is_youtube else False
-                    is_high_quality = result['filesize'] > 50 * 1024 * 1024
-
-                    if is_high_quality:
-                        link = await asyncio.get_event_loop().run_in_executor(
-                            None, lambda: upload_to_hosting(result['filename'])
-                        )
-                        if link:
-                            text = (
-                                f"🎬 <b>{result.get('title', '')}</b>\n"
-                                f"📦 {format_size(result['filesize'])}\n\n"
-                                f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
-                                f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
-                            )
-                            await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
-                        else:
-                            await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг. Попробуйте позже.")
-                    elif is_short:
-                        video_file = FSInputFile(result['filename'])
-                        w, h = extract_video_dimensions(result['filename'])
-                        send_kwargs = dict(
-                            chat_id=chat_id, video=video_file,
-                            caption=f"🎬 {result.get('title', '')[:80]}"
-                        )
-                        if w and h:
-                            send_kwargs['width'] = w
-                            send_kwargs['height'] = h
-                        await bot.send_video(**send_kwargs)
-                    elif is_youtube:
-                        doc_file = FSInputFile(result['filename'])
-                        await bot.send_document(
-                            chat_id=chat_id, document=doc_file,
-                            caption=f"🎬 {result.get('title', '')[:80]}\n📦 {format_size(result['filesize'])}"
-                        )
+                    if photos:
+                        task.status = 'done'
+                        task.result = {'photos': photos}
+                        caption_text = caption.strip() if caption else ''
+                        for i, fpath in enumerate(photos):
+                            try:
+                                cap = caption_text[:1024] if (i == 0 and caption_text) else None
+                                is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
+                                fobj = FSInputFile(fpath)
+                                if is_video:
+                                    await bot.send_video(chat_id=chat_id, video=fobj, caption=cap)
+                                else:
+                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                                if i < len(photos) - 1:
+                                    await asyncio.sleep(0.5)
+                            except Exception as e:
+                                logger.error(f"TT carousel send [{i}] error: {e}")
+                                await asyncio.sleep(1)
                     else:
-                        desc = result.get('description', '').strip()
-                        cap_parts = []
-                        if result.get('uploader'):
-                            cap_parts.append(f"👤 {result['uploader']}")
-                        if desc:
-                            cap_parts.append(desc[:800])
-                        cap_parts.append(f"📦 {format_size(result['filesize'])}")
-                        cap = '\n\n'.join(cap_parts)
+                        raise RuntimeError('Не удалось извлечь медиа из TikTok')
+
+                    queue.pop(0)
+                    await update_status(build_queue_text(queue))
+                    continue
+
+                if url_type == 'ig_post':
+                    task.status = 'downloading'
+                    await update_status(build_queue_text(queue))
+
+                    photos, caption, ig_tmp_dir = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: download_ig_post(task.url)
+                    )
+
+                    if photos:
+                        task.status = 'done'
+                        task.result = {'photos': photos}
+                        caption_text = caption.strip() if caption else ''
+                        for i, fpath in enumerate(photos):
+                            try:
+                                cap = caption_text[:1024] if (i == 0 and caption_text) else None
+                                is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
+                                thumb_path = extract_thumbnail(fpath) if is_video else None
+                                fobj = FSInputFile(fpath)
+                                thumb_obj = FSInputFile(thumb_path) if thumb_path else None
+                                if is_video:
+                                    await bot.send_video(chat_id=chat_id, video=fobj, caption=cap, thumbnail=thumb_obj)
+                                else:
+                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                                if thumb_path and os.path.exists(thumb_path):
+                                    os.remove(thumb_path)
+                                if i < len(photos) - 1:
+                                    await asyncio.sleep(0.5)
+                            except Exception as e:
+                                logger.error(f"IG send [{i}] error: {e}")
+                                await asyncio.sleep(1)
+                    else:
+                        raise RuntimeError('Не удалось скачать Instagram-сообщение')
+
+                    queue.pop(0)
+                    await update_status(build_queue_text(queue))
+                    continue
+
+                task.status = 'downloading'
+                await update_status(build_queue_text(queue))
+
+                msg_ref = [status_msg]
+                try:
+                    result = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None, lambda: download_video(task, msg_ref, loop, queue=queue)
+                        ),
+                        timeout=300
+                    )
+                except asyncio.TimeoutError:
+                    result = {'error': 'Таймаут загрузки (5 мин)'}
+
+                task.result = result
+
+                if 'error' in result:
+                    task.status = 'error'
+                    await bot.send_message(chat_id, f"❌ {result['error']}")
+                else:
+                    task.status = 'done'
+                    task.filename = result['filename']
+
+                    try:
+                        is_youtube = detect_platform(task.url) == 'youtube'
+                        is_short = '/shorts/' in task.url if is_youtube else False
+                        is_high_quality = result['filesize'] > 50 * 1024 * 1024
 
                         if is_high_quality:
                             link = await asyncio.get_event_loop().run_in_executor(
@@ -1054,7 +967,7 @@ async def process_queue(chat_id, bot, loop):
                             )
                             if link:
                                 text = (
-                                    f"🎬 <b>{result['title']}</b>\n"
+                                    f"🎬 <b>{result.get('title', '')}</b>\n"
                                     f"📦 {format_size(result['filesize'])}\n\n"
                                     f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
                                     f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
@@ -1062,28 +975,78 @@ async def process_queue(chat_id, bot, loop):
                                 await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                             else:
                                 await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг. Попробуйте позже.")
-                        else:
+                        elif is_short:
                             video_file = FSInputFile(result['filename'])
-                            thumb_file = FSInputFile(result['thumb']) if result.get('thumb') else None
                             w, h = extract_video_dimensions(result['filename'])
-                            send_kwargs = dict(chat_id=chat_id, video=video_file, caption=cap[:1024], thumbnail=thumb_file)
+                            send_kwargs = dict(
+                                chat_id=chat_id, video=video_file,
+                                caption=f"🎬 {result.get('title', '')[:80]}"
+                            )
                             if w and h:
                                 send_kwargs['width'] = w
                                 send_kwargs['height'] = h
                             await bot.send_video(**send_kwargs)
-                except Exception as e:
-                    try:
-                        await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}")
-                    except Exception:
-                        pass
-                finally:
-                    if os.path.exists(result['filename']):
-                        os.remove(result['filename'])
-                    if result.get('thumb') and os.path.exists(result['thumb']):
-                        os.remove(result['thumb'])
+                        elif is_youtube:
+                            doc_file = FSInputFile(result['filename'])
+                            await bot.send_document(
+                                chat_id=chat_id, document=doc_file,
+                                caption=f"🎬 {result.get('title', '')[:80]}\n📦 {format_size(result['filesize'])}"
+                            )
+                        else:
+                            desc = result.get('description', '').strip()
+                            cap_parts = []
+                            if result.get('uploader'):
+                                cap_parts.append(f"👤 {result['uploader']}")
+                            if desc:
+                                cap_parts.append(desc[:800])
+                            cap_parts.append(f"📦 {format_size(result['filesize'])}")
+                            cap = '\n\n'.join(cap_parts)
 
-            queue.pop(0)
-            await update_status(build_queue_text(queue))
+                            if is_high_quality:
+                                link = await asyncio.get_event_loop().run_in_executor(
+                                    None, lambda: upload_to_hosting(result['filename'])
+                                )
+                                if link:
+                                    text = (
+                                        f"🎬 <b>{result['title']}</b>\n"
+                                        f"📦 {format_size(result['filesize'])}\n\n"
+                                        f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
+                                        f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
+                                    )
+                                    await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
+                                else:
+                                    await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг. Попробуйте позже.")
+                            else:
+                                video_file = FSInputFile(result['filename'])
+                                thumb_file = FSInputFile(result['thumb']) if result.get('thumb') else None
+                                w, h = extract_video_dimensions(result['filename'])
+                                send_kwargs = dict(chat_id=chat_id, video=video_file, caption=cap[:1024], thumbnail=thumb_file)
+                                if w and h:
+                                    send_kwargs['width'] = w
+                                    send_kwargs['height'] = h
+                                await bot.send_video(**send_kwargs)
+                    except Exception as e:
+                        task.status = 'error'
+                        task.result = {'error': f'Ошибка отправки: {str(e)[:200]}'}
+                        await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}")
+                    finally:
+                        if os.path.exists(result['filename']):
+                            os.remove(result['filename'])
+                        if result.get('thumb') and os.path.exists(result['thumb']):
+                            os.remove(result['thumb'])
+                queue.pop(0)
+                await update_status(build_queue_text(queue))
+
+            except Exception as e:
+                logger.error(f"Queue worker error for chat {chat_id}: {e}")
+                task.status = 'error'
+                task.result = {'error': f'Внутренняя ошибка: {str(e)[:200]}'}
+                try:
+                    await bot.send_message(chat_id, f"❌ {task.result['error']}")
+                except Exception:
+                    pass
+                queue.pop(0)
+                await update_status(build_queue_text(queue))
 
         if status_msg:
             try:
