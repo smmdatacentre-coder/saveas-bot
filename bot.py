@@ -85,7 +85,7 @@ def detect_url_type(url):
     u = url.lower()
     if 'ok.ru' in u:
         return 'broken'
-    if re.search(r'instagram\.com/p/', u) or re.search(r'instagram\.com/reel/', u):
+    if re.search(r'instagram\.com/p/', u) or re.search(r'instagram\.com/reels?/', u):
         return 'ig_post'
     if 'youtube.com' in u or 'youtu.be' in u:
         if '/shorts/' in u:
@@ -871,53 +871,6 @@ def download_x_media(url):
 
 
 def download_youtube_cobalt(url, audio_only=False):
-    """Fallback: use cobalt.tools API to download YouTube when yt-dlp is blocked."""
-    try:
-        payload = {
-            'url': url,
-            'vCodec': 'h264',
-            'vQuality': '720',
-            'aFormat': 'mp3',
-            'isAudioOnly': audio_only,
-            'filenamePattern': 'basic',
-        }
-        resp = requests.post(
-            'https://api.cobalt.tools/api/json',
-            json=payload,
-            headers={
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-            },
-            timeout=30,
-        )
-        if resp.status_code != 200:
-            logger.warning(f"Cobalt API HTTP {resp.status_code}")
-            return None
-        data = resp.json()
-        if data.get('status') == 'error':
-            logger.warning(f"Cobalt error: {data.get('error', {}).get('code', 'unknown')}")
-            return None
-        download_url = data.get('url')
-        if not download_url:
-            return None
-        tmp_dir = os.path.join(DOWNLOAD_DIR, f"cobalt_{uuid.uuid4().hex[:8]}")
-        os.makedirs(tmp_dir, exist_ok=True)
-        filename = data.get('filename', 'video.mp4')
-        if audio_only and not filename.endswith(('.mp3', '.m4a', '.webm')):
-            filename = filename.rsplit('.', 1)[0] + '.mp3'
-        filepath = os.path.join(tmp_dir, filename)
-        dr = requests.get(download_url, timeout=300, stream=True)
-        if dr.status_code != 200:
-            logger.warning(f"Cobalt download HTTP {dr.status_code}")
-            return None
-        with open(filepath, 'wb') as f:
-            for chunk in dr.iter_content(chunk_size=8192):
-                f.write(chunk)
-        if os.path.getsize(filepath) > 0:
-            logger.info(f"Cobalt download success: {filepath}")
-            return filepath
-    except Exception as e:
-        logger.error(f"Cobalt download error: {e}")
     return None
 
 
@@ -976,7 +929,6 @@ def download_video(task, msg_ref, loop, queue=None):
                 download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
 
                 if getattr(task, 'audio_only', False):
-                    ffmpeg_location = get_ffmpeg_location()
                     mp3_opts = {
                         'format': 'bestaudio/best',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
@@ -986,13 +938,6 @@ def download_video(task, msg_ref, loop, queue=None):
                         'socket_timeout': 30,
                         'progress_hooks': [tracker.hook],
                     }
-                    if ffmpeg_location:
-                        mp3_opts['ffmpeg_location'] = ffmpeg_location
-                        mp3_opts['postprocessors'] = [{
-                            'key': 'FFmpegExtractAudio',
-                            'preferredcodec': 'mp3',
-                            'preferredquality': '320',
-                        }]
                     for cli_idx, client in enumerate(download_clients):
                         try:
                             mp3_dl = dict(mp3_opts)
@@ -1005,36 +950,6 @@ def download_video(task, msg_ref, loop, queue=None):
                             if cli_idx == len(download_clients) - 1:
                                 raise
                             continue
-                    else:
-                        logger.warning("All YouTube MP3 clients failed, trying cobalt.tools API...")
-                        cobalt_file = download_youtube_cobalt(url, audio_only=True)
-                        if cobalt_file:
-                            tracker.done()
-                            if not ffmpeg_location:
-                                return {'error': 'MP3 требует ffmpeg на сервере'}
-                            audio_exts = ('.mp3', '.m4a', '.webm', '.ogg', '.opus', '.wav', '.aac')
-                            if not cobalt_file.lower().endswith(audio_exts):
-                                try:
-                                    audio_fn = cobalt_file.rsplit('.', 1)[0] + '.mp3'
-                                    subprocess.run(
-                                        [ffmpeg_path, '-y', '-i', cobalt_file, '-vn',
-                                         '-acodec', 'libmp3lame', '-ab', '320k', audio_fn],
-                                        capture_output=True, timeout=120
-                                    )
-                                    if os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
-                                        os.remove(cobalt_file)
-                                        cobalt_file = audio_fn
-                                except Exception:
-                                    pass
-                            return {
-                                'filename': cobalt_file,
-                                'title': title or 'Audio',
-                                'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
-                                'filesize': os.path.getsize(cobalt_file),
-                                'description': ((info.get('description', '') or '')[:1000] if info else ''),
-                                'audio_only': True,
-                            }
-                        raise
                     tracker.done()
                     audio_exts = ('.mp3', '.m4a', '.webm', '.ogg', '.opus', '.wav', '.aac')
                     fn_list = [f for f in glob.glob(os.path.join(dl_dir, f'{vid_id}.*')) if f.lower().endswith(audio_exts)]
@@ -1043,33 +958,34 @@ def download_video(task, msg_ref, loop, queue=None):
                     if not fn_list:
                         return {'error': 'Файл не найден'}
                     fn = fn_list[0]
-                    if not fn.lower().endswith(audio_exts):
-                        if ffmpeg_location:
-                            logger.warning(f"MP3: got video file {fn}, trying to extract audio...")
-                            try:
-                                import subprocess as sp
-                                audio_fn = fn.rsplit('.', 1)[0] + '.mp3'
-                                sp.run(
-                                    [ffmpeg_path, '-y', '-i', fn, '-vn',
-                                     '-acodec', 'libmp3lame', '-ab', '320k', audio_fn],
-                                    capture_output=True, timeout=120
-                                )
-                                if os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
-                                    os.remove(fn)
-                                    fn = audio_fn
-                                else:
-                                    os.remove(fn)
-                                    return {'error': 'MP3: ffmpeg не смог извлечь аудио'}
-                            except Exception as e:
-                                logger.error(f"MP3 extract error: {e}")
-                                if os.path.exists(fn):
-                                    os.remove(fn)
-                                return {'error': f'MP3 ошибка: {str(e)[:100]}'}
-                        else:
+                    if not ffmpeg_path or not (os.path.exists(ffmpeg_path) or shutil.which('ffmpeg')):
+                        if not fn.lower().endswith(('.mp3',)):
                             os.remove(fn)
                             return {'error': 'MP3 требует ffmpeg на сервере'}
-                    if not ffmpeg_location:
-                        return {'error': 'MP3 требует ffmpeg на сервере'}
+                    if not fn.lower().endswith('.mp3'):
+                        audio_fn = fn.rsplit('.', 1)[0] + '.mp3'
+                        try:
+                            proc = subprocess.run(
+                                [ffmpeg_path, '-y', '-i', fn, '-vn',
+                                 '-acodec', 'libmp3lame', '-ab', '320k',
+                                 '-ar', '44100', audio_fn],
+                                capture_output=True, text=True, timeout=300
+                            )
+                            if proc.returncode != 0:
+                                logger.error(f"ffmpeg MP3 error: {proc.stderr[:300]}")
+                                os.remove(fn)
+                                return {'error': f'MP3 конвертация не удалась: {proc.stderr[:100]}'}
+                            if os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
+                                os.remove(fn)
+                                fn = audio_fn
+                            else:
+                                os.remove(fn)
+                                return {'error': 'MP3: ffmpeg создал пустой файл'}
+                        except Exception as e:
+                            logger.error(f"ffmpeg MP3 exception: {e}")
+                            if os.path.exists(fn):
+                                os.remove(fn)
+                            return {'error': f'MP3 ошибка: {str(e)[:100]}'}
                     return {
                         'filename': fn,
                         'title': title or 'Audio',
@@ -1118,24 +1034,6 @@ def download_video(task, msg_ref, loop, queue=None):
                             raise
                         continue
                 else:
-                    logger.warning("All YouTube clients failed, trying cobalt.tools API...")
-                    cobalt_file = download_youtube_cobalt(url, audio_only=False)
-                    if cobalt_file:
-                        tracker.done()
-                        fn = cobalt_file
-                        sz = os.path.getsize(fn)
-                        if sz == 0:
-                            os.remove(fn)
-                            return {'error': 'Файл пустой'}
-                        thumb = extract_thumbnail(fn)
-                        return {
-                            'filename': fn,
-                            'title': title or 'Видео',
-                            'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
-                            'filesize': sz,
-                            'description': ((info.get('description', '') or '')[:1000] if info else ''),
-                            'thumb': thumb,
-                        }
                     raise last_err
                 tracker.done()
 
