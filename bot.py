@@ -1763,7 +1763,8 @@ async def main():
             "• TikTok (видео + карусели)\n"
             "• X/Twitter (видео + фото + текст)\n"
             "• Rutube\n\n"
-            "🎵 <b>Музыка:</b> напиши <code>/music название трека</code>\n\n"
+            "🎵 <b>Музыка:</b> напиши название трека — найду и скачаю!\n"
+            "<i>Пример: Imagine Dragons Bones</i>\n\n"
             "Можно отправить несколько ссылок подряд —\n"
             "они встанут в очередь.\n\n"
             "Для YouTube и VK можно выбрать качество."
@@ -1784,9 +1785,17 @@ async def main():
 
     @dp.message(F.text)
     async def handle_link(message: Message):
-        urls = re.findall(r'https?://[^\s<>"]+', message.text.strip())
+        text = message.text.strip()
+        urls = re.findall(r'https?://[^\s<>"]+', text)
+
         if not urls:
-            await message.answer("❌ Отправь ссылку на видео")
+            if not VK_MUSIC_LOGIN or not VK_MUSIC_PASSWORD:
+                await message.answer("❌ Отправь ссылку на видео")
+                return
+            if len(text) < 2:
+                await message.answer("❌ Отправь ссылку на видео или название трека")
+                return
+            await do_music_search(message, text)
             return
 
         chat_id = message.chat.id
@@ -2001,14 +2010,15 @@ async def main():
         if not query:
             await message.answer(
                 "🎵 <b>Поиск музыки</b>\n\n"
-                "Отправь название трека или исполнителя:\n"
-                "<code>/music Imagine Dragons</code>",
+                "Просто напиши название трека в чат",
                 parse_mode=ParseMode.HTML
             )
             return
+        await do_music_search(message, query)
 
+    async def do_music_search(message: Message, query: str):
         if not VK_MUSIC_LOGIN or not VK_MUSIC_PASSWORD:
-            await message.answer("❌ VK Music не настроен. Нужны VK_MUSIC_LOGIN и VK_MUSIC_PASSWORD в env vars.")
+            await message.answer("❌ VK Music не настроен.")
             return
 
         await message.answer(f"🔍 Ищу: <b>{query}</b>...", parse_mode=ParseMode.HTML)
