@@ -2111,17 +2111,66 @@ async def main():
                 'no_warnings': True,
                 'extract_flat': True,
                 'force_generic_extractor': False,
+                'socket_timeout': 15,
             }
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: yt_dlp.YoutubeDL(opts).extract_info(f'ytsearch{limit}:{query}', download=False)
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: yt_dlp.YoutubeDL(opts).extract_info(f'ytsearch{limit}:{query}', download=False)
+                ),
+                timeout=25
             )
             if not result or 'entries' not in result:
                 return []
             return list(result['entries'])
+        except asyncio.TimeoutError:
+            logger.warning("YT search timed out, trying innertube...")
+            return await _innertube_search(query, limit)
         except Exception as e:
             logger.error(f"YT music search error: {e}")
+            return await _innertube_search(query, limit)
+
+    async def _innertube_search(query, limit=10):
+        try:
+            payload = {
+                'context': {
+                    'client': {
+                        'clientName': 'WEB',
+                        'clientVersion': '2.20240101.00.00',
+                        'hl': 'en',
+                        'gl': 'US',
+                    }
+                },
+                'query': f'ytsearch{limit}:{query}',
+            }
+            resp = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: requests.post(
+                    'https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+                    json=payload,
+                    headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+                    timeout=15
+                )
+            )
+            if resp.status_code != 200:
+                return []
+            data = resp.json()
+            items = data.get('contents', {}).get('twoColumnSearchResultsRenderer', {}).get('primaryContents', {}).get('sectionListRenderer', {}).get('contents', [])
+            tracks = []
+            for section in items:
+                for item in section.get('itemSectionRenderer', {}).get('contents', []):
+                    vid = item.get('videoRenderer')
+                    if vid:
+                        tracks.append({
+                            'id': vid.get('videoId', ''),
+                            'title': vid.get('title', {}).get('runs', [{}])[0].get('text', ''),
+                            'duration': vid.get('lengthText', {}).get('simpleText', ''),
+                            'url': f"https://www.youtube.com/watch?v={vid.get('videoId', '')}",
+                        })
+            return tracks[:limit]
+        except Exception as e:
+            logger.error(f"Innertube search error: {e}")
             return []
 
     @dp.message(F.text.startswith('/music'))
@@ -2154,7 +2203,12 @@ async def main():
         for i, track in enumerate(tracks[:10]):
             title = track.get('title', 'Unknown')
             duration = track.get('duration') or 0
-            dur_str = f"{int(duration) // 60}:{int(duration) % 60:02d}" if duration else ''
+            if isinstance(duration, str) and ':' in duration:
+                dur_str = duration
+            elif isinstance(duration, (int, float)) and duration:
+                dur_str = f"{int(duration) // 60}:{int(duration) % 60:02d}"
+            else:
+                dur_str = ''
             text += f"<b>{i+1}.</b> {title} {dur_str}\n"
             keyboard.append([InlineKeyboardButton(
                 text=f"⬇️ {i+1}. {title[:40]}",
