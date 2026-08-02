@@ -882,6 +882,45 @@ def _threads_resolve_url(url):
     return url
 
 
+def _get_carousel_from_feed(username, shortcode):
+    """Fetch user's feed via Googlebot SSR and extract carousel media for a post."""
+    try:
+        feed_url = f'https://www.threads.com/@{username}/'
+        resp = requests.get(feed_url, headers={'User-Agent': GOOGLEBOT_UA}, timeout=20)
+        if resp.status_code != 200:
+            return []
+
+        post = _find_post_object_in_feed(resp.text, shortcode)
+        if not post:
+            return []
+
+        carousel = post.get('carousel_media')
+        if not carousel or not isinstance(carousel, list):
+            return []
+
+        carousel_urls = []
+        for item in carousel:
+            if not isinstance(item, dict):
+                continue
+            if item.get('video_versions'):
+                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                url = best.get('url')
+                if url:
+                    carousel_urls.append(('video', url))
+            elif item.get('image_versions2'):
+                cands = item['image_versions2'].get('candidates', [])
+                if cands:
+                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                    url = best.get('url')
+                    if url:
+                        carousel_urls.append(('image', url))
+
+        return carousel_urls
+    except Exception as e:
+        logger.warning(f"Threads feed carousel fallback error: {e}")
+        return []
+
+
 def _find_post_object_in_feed(html_feed, shortcode):
     """Find the complete post object for a given shortcode in the feed HTML."""
     sc_pattern = f'"code":"{shortcode}"'
@@ -1024,6 +1063,7 @@ def _extract_threads_post_data(html, shortcode, username=None):
         carousel_urls = _get_carousel_from_feed(username, shortcode) or []
 
     cap_match = re.search(r'"caption"\s*:\s*\{"text"\s*:\s*"([^"]*)"', html[max(0, code_pos - 5000):code_pos])
+
     caption = ''
     if cap_match:
         caption = cap_match.group(1).replace('\\n', '\n').replace('\\u2019', "'")
