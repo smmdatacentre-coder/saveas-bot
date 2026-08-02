@@ -1,13 +1,15 @@
 FROM python:3.11-slim
 
-ARG BUILD_DATE=2026-08-02-v3
+ARG BUILD_DATE=2026-08-02-v4
 
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl xz-utils \
-    libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 libxdamage1 libxrandr2 \
-    libgbm1 libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0 libcups2 \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+    libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
+    libgbm1 libpango-1.0-0 libcairo2 libasound2 libatspi2.0-0 \
+    libxshmfence1 fonts-liberation libappindicator3-1 xdg-utils \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /tmp/ffmpeg-src \
     && curl -sL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJf - -C /tmp/ffmpeg-src \
