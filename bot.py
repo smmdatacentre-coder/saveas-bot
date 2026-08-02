@@ -2341,7 +2341,7 @@ async def main():
             logger.error(f"YT music search error: {e}")
             return await _innertube_search(query, limit)
 
-    async def _innertube_search(query, limit=10):
+     async def _innertube_search(query, limit=10):
         try:
             payload = {
                 'context': {
@@ -2354,14 +2354,17 @@ async def main():
                 },
                 'query': f'ytsearch{limit}:{query}',
             }
-            resp = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: requests.post(
-                    'https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-                    json=payload,
-                    headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
-                    timeout=15
-                )
+            resp = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: requests.post(
+                        'https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+                        json=payload,
+                        headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+                        timeout=15
+                    )
+                ),
+                timeout=20
             )
             if resp.status_code != 200:
                 return []
