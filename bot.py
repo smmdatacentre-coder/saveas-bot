@@ -877,42 +877,76 @@ def download_threads_post(url):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required']
             )
             context = browser.new_context(
                 user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-                viewport={'width': 390, 'height': 844}
+                viewport={'width': 390, 'height': 844},
+                is_mobile=True,
             )
             page = context.new_page()
             
-            page.goto(url, wait_until='networkidle', timeout=30000)
+            page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            page.wait_for_timeout(2000)
+            
+            try:
+                page.wait_for_selector('article', timeout=10000)
+            except:
+                pass
+            
             page.wait_for_timeout(3000)
             
+            try:
+                play_btn = page.query_selector('div[aria-label="Play"]')
+                if play_btn:
+                    play_btn.click()
+                    page.wait_for_timeout(2000)
+            except:
+                pass
+            
             media_data = page.evaluate('''() => {
-                const result = {video: null, images: [], title: document.title};
-                
-                const ogVideo = document.querySelector('meta[property="og:video"]');
-                if (ogVideo) result.video = ogVideo.content;
-                
-                const ogImage = document.querySelector('meta[property="og:image"]');
-                if (ogImage && !result.video) result.images.push(ogImage.content);
+                const result = {video: null, images: [], caption: '', title: document.title};
                 
                 const article = document.querySelector('article');
-                if (article) {
-                    const videos = article.querySelectorAll('video, video source');
-                    videos.forEach(v => {
-                        const src = v.src || v.querySelector('source')?.src;
-                        if (src && !result.video) result.video = src;
-                    });
-                    
-                    const imgs = article.querySelectorAll('img');
-                    imgs.forEach(img => {
-                        const src = img.src;
-                        if (src && !src.includes('profile') && !src.includes('avatar') && 
-                            !src.includes('scontent-static') && src.includes('scontent')) {
-                            if (!result.images.includes(src)) result.images.push(src);
+                if (!article) return result;
+                
+                const videos = article.querySelectorAll('video');
+                for (const v of videos) {
+                    if (v.src) { result.video = v.src; break; }
+                    const source = v.querySelector('source');
+                    if (source && source.src) { result.video = source.src; break; }
+                }
+                
+                const playButtons = article.querySelectorAll('[data-pressable-container="true"]');
+                for (const btn of playButtons) {
+                    const video = btn.querySelector('video');
+                    if (video) {
+                        if (video.src) result.video = video.src;
+                        else {
+                            const src = video.querySelector('source');
+                            if (src) result.video = src.src;
                         }
-                    });
+                    }
+                }
+                
+                const imgs = article.querySelectorAll('img');
+                for (const img of imgs) {
+                    const src = img.src || img.getAttribute('src');
+                    if (src && src.includes('scontent') && !src.includes('profile') && 
+                        !src.includes('avatar') && !src.includes('rsrc.php') &&
+                        !src.includes('emoji') && !src.includes('72x72')) {
+                        if (!result.images.includes(src)) result.images.push(src);
+                    }
+                }
+                
+                const textEls = article.querySelectorAll('span[dir="auto"], div[dir="auto"]');
+                for (const el of textEls) {
+                    const t = el.textContent?.trim();
+                    if (t && t.length > 5 && !t.includes(' likes') && !t.includes(' replies') &&
+                        !t.includes(' reposts') && !t.includes(' @') && t !== result.title) {
+                        result.caption = t;
+                        break;
+                    }
                 }
                 
                 return result;
@@ -922,7 +956,11 @@ def download_threads_post(url):
             
             video_url = media_data.get('video')
             image_urls = media_data.get('images', [])
-            title = media_data.get('title', 'Threads post')[:1024]
+            post_text = media_data.get('caption', '')[:1024]
+            title = media_data.get('title', 'Threads post')
+            
+            caption = post_text if post_text else title
+            caption = caption[:1020] + '\n\n📎 скачано с @saverdshot_bot' if post_text else f'{title[:500]}\n\n📎 скачано с @saverdshot_bot'
             
             media_urls = []
             if video_url:
@@ -962,11 +1000,11 @@ def download_threads_post(url):
             
             has_video = any(f.lower().endswith('.mp4') for f in files)
             if has_video:
-                return {'type': 'video', 'files': files, 'caption': title}
+                return {'type': 'video', 'files': files, 'caption': caption[:1024]}
             elif len(files) == 1:
-                return {'type': 'photo', 'files': files, 'caption': title}
+                return {'type': 'photo', 'files': files, 'caption': caption[:1024]}
             else:
-                return {'type': 'media_group', 'files': files, 'caption': title}
+                return {'type': 'media_group', 'files': files, 'caption': caption[:1024]}
 
     except Exception as e:
         logger.error(f"Threads download error: {e}")
