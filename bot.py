@@ -2341,7 +2341,7 @@ async def main():
             logger.error(f"YT music search error: {e}")
             return await _innertube_search(query, limit)
 
-     async def _innertube_search(query, limit=10):
+    async def _innertube_search(query, limit=10):
         try:
             payload = {
                 'context': {
