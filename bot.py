@@ -120,6 +120,8 @@ def detect_platform(url):
         return 'rutube'
     if 'x.com' in u or 'twitter.com' in u:
         return 'x'
+    if 'threads.net' in u or 'threads.com' in u:
+        return 'threads'
     return 'unknown'
 
 
@@ -864,6 +866,77 @@ def download_x_media(url):
     return {'type': 'error', 'error': 'Не удалось скачать из X/Twitter'}
 
 
+def download_threads_post(url):
+    """Download media from Threads post via HTML meta tags."""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }
+        resp = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            return {'type': 'error', 'error': f'HTTP {resp.status_code}'}
+
+        html = resp.text
+        final_url = resp.url
+
+        video_url = None
+        image_url = None
+
+        m = re.search(r'og:video["\s]+content="([^"]+)"', html)
+        if m:
+            video_url = m.group(1).replace('&amp;', '&')
+
+        m = re.search(r'og:image["\s]+content="([^"]+)"', html)
+        if m:
+            image_url = m.group(1).replace('&amp;', '&')
+
+        if not video_url and not image_url:
+            for pattern in [
+                r'"video_url"\s*:\s*"([^"]+)"',
+                r'"url"\s*:\s*"(https://scontent[^"]+\.(?:mp4|jpg|png)[^"]*)"',
+            ]:
+                m = re.search(pattern, html)
+                if m:
+                    val = m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
+                    if '.mp4' in val:
+                        video_url = val
+                    else:
+                        image_url = val
+                    break
+
+        title_m = re.search(r'og:title["\s]+content="([^"]+)"', html)
+        title = title_m.group(1) if title_m else 'Threads post'
+        title = title.replace('&amp;', '&').replace('&#39;', "'")
+
+        tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
+        os.makedirs(tmp_dir, exist_ok=True)
+
+        if video_url:
+            filepath = os.path.join(tmp_dir, 'video.mp4')
+            dr = requests.get(video_url, headers=headers, timeout=60, stream=True)
+            if dr.status_code == 200:
+                with open(filepath, 'wb') as f:
+                    for chunk in dr.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                if os.path.getsize(filepath) > 0:
+                    return {'type': 'video', 'files': [filepath], 'caption': title[:1024]}
+
+        if image_url:
+            filepath = os.path.join(tmp_dir, 'photo.jpg')
+            dr = requests.get(image_url, headers=headers, timeout=30)
+            if dr.status_code == 200:
+                with open(filepath, 'wb') as f:
+                    f.write(dr.content)
+                if os.path.getsize(filepath) > 0:
+                    return {'type': 'photo', 'files': [filepath], 'caption': title[:1024]}
+
+        return {'type': 'error', 'error': 'Медиа не найдено в посте'}
+
+    except Exception as e:
+        logger.error(f"Threads download error: {e}")
+        return {'type': 'error', 'error': str(e)[:200]}
+
+
 def download_youtube_cobalt(url, audio_only=False):
     return None
 
@@ -1548,6 +1621,42 @@ async def process_queue(chat_id, bot, loop):
                     await update_status(build_queue_text(queue))
                     continue
 
+                if detect_platform(task.url) == 'threads':
+                    task.status = 'downloading'
+                    await update_status(build_queue_text(queue))
+                    threads_result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: download_threads_post(task.url)
+                    )
+                    if threads_result.get('type') in ('video', 'photo'):
+                        files = threads_result.get('files', [])
+                        caption = threads_result.get('caption', '')
+                        for i, fpath in enumerate(files):
+                            try:
+                                is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
+                                fobj = FSInputFile(fpath)
+                                cap = caption[:1024] if (i == 0 and caption) else None
+                                if is_video:
+                                    w, h = extract_video_dimensions(fpath)
+                                    send_kwargs = dict(chat_id=chat_id, video=fobj, caption=cap)
+                                    if w and h:
+                                        send_kwargs['width'] = w
+                                        send_kwargs['height'] = h
+                                    await bot.send_video(**send_kwargs)
+                                else:
+                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                                if i < len(files) - 1:
+                                    await asyncio.sleep(0.5)
+                            except Exception as e:
+                                logger.error(f"Threads send [{i}] error: {e}")
+                        task.status = 'done'
+                        task.result = {'photos': files}
+                    else:
+                        raise RuntimeError(threads_result.get('error', 'Не удалось скачать из Threads'))
+
+                    queue.pop(0)
+                    await update_status(build_queue_text(queue))
+                    continue
+
                 if url_type == 'ig_post':
                     task.status = 'downloading'
                     await update_status(build_queue_text(queue))
@@ -1762,6 +1871,7 @@ async def main():
             "• Instagram (рилсы + карусели)\n"
             "• TikTok (видео + карусели)\n"
             "• X/Twitter (видео + фото + текст)\n"
+            "• Threads (посты + видео)\n"
             "• Rutube\n\n"
             "🎵 <b>Музыка:</b> напиши название трека — найду и скачаю!\n"
             "<i>Пример: Imagine Dragons Bones</i>\n\n"
