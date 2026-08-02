@@ -5,4 +5,3 @@ beautifulsoup4==4.15.0
 lxml==6.1.1
 aiohttp==3.12.15
 gallery-dl
-vkmusix

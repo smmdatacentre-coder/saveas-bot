@@ -867,18 +867,19 @@ def download_x_media(url):
 
 
 def download_threads_post(url):
-    """Download media from Threads post via HTML meta tags."""
+    """Download media from Threads post via multiple methods."""
+    import json as _json
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
         }
         resp = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
         if resp.status_code != 200:
             return {'type': 'error', 'error': f'HTTP {resp.status_code}'}
 
         html = resp.text
-        final_url = resp.url
-
         video_url = None
         image_url = None
 
@@ -894,6 +895,7 @@ def download_threads_post(url):
             for pattern in [
                 r'"video_url"\s*:\s*"([^"]+)"',
                 r'"url"\s*:\s*"(https://scontent[^"]+\.(?:mp4|jpg|png)[^"]*)"',
+                r'"src"\s*:\s*"(https://[^"]+\.(?:mp4|jpg|png)[^"]*)"',
             ]:
                 m = re.search(pattern, html)
                 if m:
@@ -906,7 +908,7 @@ def download_threads_post(url):
 
         title_m = re.search(r'og:title["\s]+content="([^"]+)"', html)
         title = title_m.group(1) if title_m else 'Threads post'
-        title = title.replace('&amp;', '&').replace('&#39;', "'")
+        title = title.replace('&amp;', '&').replace('&#39;', "'").replace('&quot;', '"')
 
         tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
         os.makedirs(tmp_dir, exist_ok=True)
@@ -1871,10 +1873,10 @@ async def main():
             "• Instagram (рилсы + карусели)\n"
             "• TikTok (видео + карусели)\n"
             "• X/Twitter (видео + фото + текст)\n"
-            "• Threads (посты + видео)\n"
             "• Rutube\n"
-            "• <i>Для YouTube и VK можно выбрать качество.</i>\n"
-            "🎵 <b>Музыка:</b> напиши название трека — найду и скачаю!\n\n"
+            "• <i>Для YouTube и VK можно выбрать качество.</i>\n\n"
+            "🎵 <b>Поиск музыки:</b> напиши название трека — найду и скачаю!\n"
+            "<i>Пример: Imagine Dragons Bones</i>\n\n"
             "Можно отправить несколько ссылок подряд —\n"
             "они встанут в очередь."
         )
@@ -1898,9 +1900,6 @@ async def main():
         urls = re.findall(r'https?://[^\s<>"]+', text)
 
         if not urls:
-            if not VK_MUSIC_LOGIN or not VK_MUSIC_PASSWORD:
-                await message.answer("❌ Отправь ссылку на видео")
-                return
             if len(text) < 2:
                 await message.answer("❌ Отправь ссылку на видео или название трека")
                 return
@@ -2078,40 +2077,27 @@ async def main():
 
         ensure_queue_worker(chat_id, bot, loop)
 
-    VK_MUSIC_LOGIN = os.environ.get('VK_MUSIC_LOGIN', '')
-    VK_MUSIC_PASSWORD = os.environ.get('VK_MUSIC_PASSWORD', '')
-    vk_music_client = None
-
-    def get_vk_music_client():
-        nonlocal vk_music_client
-        if vk_music_client is not None:
-            return vk_music_client
-        if not VK_MUSIC_LOGIN or not VK_MUSIC_PASSWORD:
-            return None
-        try:
-            from vkmusix import Client
-            vk_music_client = Client(login=VK_MUSIC_LOGIN, password=VK_MUSIC_PASSWORD)
-            return vk_music_client
-        except Exception as e:
-            logger.error(f"VK Music init error: {e}")
-            return None
-
     music_search_cache = {}
 
-    async def vk_music_search(query, offset=0, limit=10):
-        client = get_vk_music_client()
-        if not client:
-            return None
+    async def yt_music_search(query, limit=10):
         try:
+            opts = {
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': True,
+                'force_generic_extractor': False,
+            }
             loop = asyncio.get_event_loop()
-            tracks = await loop.run_in_executor(
+            result = await loop.run_in_executor(
                 None,
-                lambda: client.searchTracks(query=query, limit=limit, offset=offset)
+                lambda: yt_dlp.YoutubeDL(opts).extract_info(f'ytsearch{limit}:{query}', download=False)
             )
-            return tracks
+            if not result or 'entries' not in result:
+                return []
+            return list(result['entries'])
         except Exception as e:
-            logger.error(f"VK Music search error: {e}")
-            return None
+            logger.error(f"YT music search error: {e}")
+            return []
 
     @dp.message(F.text.startswith('/music'))
     async def cmd_music(message: Message):
@@ -2126,40 +2112,28 @@ async def main():
         await do_music_search(message, query)
 
     async def do_music_search(message: Message, query: str):
-        if not VK_MUSIC_LOGIN or not VK_MUSIC_PASSWORD:
-            await message.answer("❌ VK Music не настроен.")
-            return
-
         await message.answer(f"🔍 Ищу: <b>{query}</b>...", parse_mode=ParseMode.HTML)
 
-        tracks = await vk_music_search(query, offset=0)
+        tracks = await yt_music_search(query, limit=10)
         if not tracks:
-            await message.answer("❌ Ничего не найдено или ошибка VK Music API")
+            await message.answer("❌ Ничего не найдено")
             return
 
         music_search_cache[str(message.chat.id)] = {
             'query': query,
-            'offset': 0,
             'tracks': tracks,
         }
 
         text = f"🎵 <b>Результаты поиска:</b> {query}\n\n"
         keyboard = []
         for i, track in enumerate(tracks[:10]):
-            title = getattr(track, 'title', str(track))
-            artist = getattr(track, 'artist', '')
-            duration = getattr(track, 'duration', 0)
+            title = track.get('title', 'Unknown')
+            duration = track.get('duration') or 0
             dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else ''
-            text += f"<b>{i+1}.</b> {artist} — {title} {dur_str}\n"
+            text += f"<b>{i+1}.</b> {title} {dur_str}\n"
             keyboard.append([InlineKeyboardButton(
-                text=f"⬇️ {i+1}. {artist[:20]} — {title[:30]}",
+                text=f"⬇️ {i+1}. {title[:40]}",
                 callback_data=f"mus_dl_{i}"
-            )])
-
-        if len(tracks) > 10:
-            keyboard.append([InlineKeyboardButton(
-                text="🔄 Еще варианты",
-                callback_data="mus_more"
             )])
 
         kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
@@ -2175,86 +2149,55 @@ async def main():
             return
 
         track = cache['tracks'][idx]
-        title = getattr(track, 'title', 'track')
-        artist = getattr(track, 'artist', '')
-        track_url = getattr(track, 'url', None)
+        title = track.get('title', 'track')
+        url = track.get('url') or track.get('webpage_url') or f"https://www.youtube.com/watch?v={track.get('id', '')}"
 
-        if not track_url:
-            await callback.answer("❌ Трек недоступен для скачивания", show_alert=True)
-            return
-
-        await callback.message.edit_text(f"⬇️ Скачиваю: {artist} — {title}...")
+        await callback.message.edit_text(f"⬇️ Скачиваю: {title}...")
 
         try:
             tmp_dir = os.path.join(DOWNLOAD_DIR, f"music_{uuid.uuid4().hex[:8]}")
             os.makedirs(tmp_dir, exist_ok=True)
-            filepath = os.path.join(tmp_dir, f"{artist} - {title}.mp3".replace('/', '_').replace('\\', '_'))
+            outtmpl = os.path.join(tmp_dir, '%(id)s.%(ext)s')
 
             loop = asyncio.get_event_loop()
-            client = get_vk_music_client()
-            downloaded = await loop.run_in_executor(
-                None,
-                lambda: client.download(link=track_url, path=filepath)
-            )
+            ffmpeg_location = get_ffmpeg_location()
+            dl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': outtmpl,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
+                'quiet': True,
+                'no_warnings': True,
+                'noplaylist': True,
+                'socket_timeout': 30,
+            }
+            if ffmpeg_location:
+                dl_opts['ffmpeg_location'] = ffmpeg_location
 
-            if not downloaded or not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
-                r = requests.get(track_url, timeout=30)
-                if r.status_code == 200 and len(r.content) > 1000:
-                    with open(filepath, 'wb') as f:
-                        f.write(r.content)
-                else:
-                    await callback.message.edit_text("❌ Не удалось скачать трек")
-                    return
+            def do_download():
+                with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                    ydl.download([url])
 
+            await loop.run_in_executor(None, do_download)
+
+            mp3_files = [f for f in os.listdir(tmp_dir) if f.endswith('.mp3')]
+            if not mp3_files:
+                await callback.message.edit_text("❌ Не удалось скачать трек")
+                return
+
+            filepath = os.path.join(tmp_dir, mp3_files[0])
             audio_file = FSInputFile(filepath)
-            cap = f"🎵 {artist} — {title}\n\n📎 скачано с @saverdshot_bot"
+            cap = f"🎵 {title}\n\n📎 скачано с @saverdshot_bot"
             await bot.send_audio(chat_id=chat_id, audio=audio_file, caption=cap)
             await callback.message.delete()
 
-            if os.path.exists(filepath):
-                os.remove(filepath)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         except Exception as e:
             logger.error(f"Music download error: {e}")
             await callback.message.edit_text(f"❌ Ошибка скачивания: {str(e)[:100]}")
-
-    @dp.callback_query(F.data == 'mus_more')
-    async def handle_music_more(callback: CallbackQuery):
-        chat_id = callback.message.chat.id
-        cache = music_search_cache.get(str(chat_id))
-        if not cache:
-            await callback.answer("Ссылка устарела", show_alert=True)
-            return
-
-        new_offset = cache['offset'] + 10
-        tracks = await vk_music_search(cache['query'], offset=new_offset)
-        if not tracks:
-            await callback.answer("Больше нет результатов", show_alert=True)
-            return
-
-        cache['offset'] = new_offset
-        cache['tracks'] = tracks
-        music_search_cache[str(chat_id)] = cache
-
-        text = f"🎵 <b>Результаты поиска:</b> {cache['query']}\n\n"
-        keyboard = []
-        for i, track in enumerate(tracks[:10]):
-            title = getattr(track, 'title', str(track))
-            artist = getattr(track, 'artist', '')
-            duration = getattr(track, 'duration', 0)
-            dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else ''
-            text += f"<b>{i+1}.</b> {artist} — {title} {dur_str}\n"
-            keyboard.append([InlineKeyboardButton(
-                text=f"⬇️ {i+1}. {artist[:20]} — {title[:30]}",
-                callback_data=f"mus_dl_{i}"
-            )])
-
-        keyboard.append([InlineKeyboardButton(
-            text="🔄 Еще варианты",
-            callback_data="mus_more"
-        )])
-
-        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
-        await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
     print("🚀 Бот запущен!")
     await dp.start_polling(bot)
