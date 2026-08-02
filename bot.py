@@ -882,7 +882,82 @@ def _threads_resolve_url(url):
     return url
 
 
-def _extract_threads_post_data(html, shortcode):
+def _find_post_object_in_feed(html_feed, shortcode):
+    """Find the complete post object for a given shortcode in the feed HTML."""
+    sc_pattern = f'"code":"{shortcode}"'
+    sc_positions = [m.start() for m in re.finditer(sc_pattern, html_feed)]
+    
+    for sc_pos in sc_positions:
+        brace_count = 0
+        post_start = -1
+        in_string = False
+        escape_next = False
+        
+        for i in range(sc_pos, max(0, sc_pos - 5000), -1):
+            ch = html_feed[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\':
+                escape_next = True
+                continue
+            if ch == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == '}':
+                brace_count += 1
+            elif ch == '{':
+                if brace_count == 0:
+                    post_start = i
+                    break
+                brace_count -= 1
+        
+        if post_start >= 0:
+            brace_count = 0
+            in_string = False
+            escape_next = False
+            post_end = -1
+            
+            for i in range(post_start, min(len(html_feed), post_start + 50000)):
+                ch = html_feed[i]
+                if escape_next:
+                    escape_next = False
+                    continue
+                if ch == '\\':
+                    escape_next = True
+                    continue
+                if ch == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == '{':
+                    brace_count += 1
+                elif ch == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        post_end = i + 1
+                        break
+            
+            if post_end > post_start:
+                post_json = html_feed[post_start:post_end]
+                post_json = post_json.replace('\\\\u0026', '&')
+                post_json = post_json.replace('\\\\u002F', '/')
+                post_json = post_json.replace('\\\\/', '/')
+                post_json = post_json.replace('\\\\u003C', '<')
+                post_json = post_json.replace('\\\\u003E', '>')
+                
+                try:
+                    post = json.loads(post_json)
+                    return post
+                except json.JSONDecodeError:
+                    pass
+    return None
+
+
+def _extract_threads_post_data(html, shortcode, username=None):
     """Extract post media from Googlebot-rendered Threads HTML."""
     code_pos = html.find(f'"code":"{shortcode}"')
     if code_pos < 0:
@@ -944,6 +1019,10 @@ def _extract_threads_post_data(html, shortcode):
                 except:
                     pass
 
+    # If no carousel on post page, try to fetch from user's feed
+    if not carousel_urls and username:
+        carousel_urls = _get_carousel_from_feed(username, shortcode) or []
+
     cap_match = re.search(r'"caption"\s*:\s*\{"text"\s*:\s*"([^"]*)"', html[max(0, code_pos - 5000):code_pos])
     caption = ''
     if cap_match:
@@ -969,15 +1048,18 @@ def download_threads_post(url):
 
         og = re.search(r'og:url.*?content="https?://[^/]+/(@[^/]+)/post/([^"&]+)', html)
         if og:
+            username = og.group(1)
             shortcode = og.group(2)
         else:
             sc_match = re.search(r'/post/([A-Za-z0-9_-]+)', url)
             shortcode = sc_match.group(1) if sc_match else None
+            username_match = re.search(r'/@([^/]+)/post/', url)
+            username = username_match.group(1) if username_match else None
 
         if not shortcode:
             return {'type': 'error', 'error': 'Не удалось определить пост'}
 
-        data = _extract_threads_post_data(html, shortcode)
+        data = _extract_threads_post_data(html, shortcode, username)
 
         if not data:
             return {'type': 'error', 'error': 'Медиа не найдено в посте (SSR)'}
@@ -2005,7 +2087,7 @@ async def main():
         else:
             await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=start_kb)
 
-    @dp.message(F.text == '🚀 Старт')
+    @dp.message(F.text == '🟢 Старт')
     async def handle_start_btn(message: Message):
         await cmd_start(message)
 
