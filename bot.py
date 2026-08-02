@@ -867,72 +867,82 @@ def download_x_media(url):
 
 
 def download_threads_post(url):
-    """Download media from Threads post via multiple methods."""
+    """Download media from Threads post using Playwright headless browser."""
+    from playwright.sync_api import sync_playwright
     import json as _json
+    
+    tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
+    os.makedirs(tmp_dir, exist_ok=True)
+    
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-        resp = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
-        if resp.status_code != 200:
-            return {'type': 'error', 'error': f'HTTP {resp.status_code}'}
-
-        html = resp.text
-        video_url = None
-        image_url = None
-
-        m = re.search(r'og:video["\s]+content="([^"]+)"', html)
-        if m:
-            video_url = m.group(1).replace('&amp;', '&')
-
-        m = re.search(r'og:image["\s]+content="([^"]+)"', html)
-        if m:
-            image_url = m.group(1).replace('&amp;', '&')
-
-        if not video_url and not image_url:
-            for pattern in [
-                r'"video_url"\s*:\s*"([^"]+)"',
-                r'"url"\s*:\s*"(https://scontent[^"]+\.(?:mp4|jpg|png)[^"]*)"',
-                r'"src"\s*:\s*"(https://[^"]+\.(?:mp4|jpg|png)[^"]*)"',
-            ]:
-                m = re.search(pattern, html)
-                if m:
-                    val = m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
-                    if '.mp4' in val:
-                        video_url = val
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                viewport={'width': 390, 'height': 844}
+            )
+            page = context.new_page()
+            
+            page.goto(url, wait_until='networkidle', timeout=30000)
+            
+            page.wait_for_timeout(3000)
+            
+            media_urls = page.evaluate('''() => {
+                const article = document.querySelector('article');
+                if (!article) return {video: null, images: [], text: document.title};
+                
+                const video = article.querySelector('video source, video');
+                const videoUrl = video ? (video.src || video.querySelector('source')?.src) : null;
+                
+                const imgs = Array.from(article.querySelectorAll('img'));
+                const imageUrls = imgs
+                    .map(img => img.src)
+                    .filter(src => src && !src.includes('profile') && !src.includes('avatar') && !src.includes('scontent-static'));
+                
+                const textEl = article.querySelector('[data-pressable-container="true"] span, div[dir="auto"]');
+                const text = textEl ? textEl.textContent : document.querySelector('meta[property="og:description"]')?.content || '';
+                
+                return {video: videoUrl, images: imageUrls, text: text};
+            }''')
+            
+            browser.close()
+            
+            video_url = media_urls.get('video')
+            image_urls = media_urls.get('images', [])
+            title = media_urls.get('text', 'Threads post')[:1024]
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            }
+            
+            if video_url:
+                filepath = os.path.join(tmp_dir, 'video.mp4')
+                dr = requests.get(video_url, headers=headers, timeout=60, stream=True)
+                if dr.status_code == 200:
+                    with open(filepath, 'wb') as f:
+                        for chunk in dr.iter_content(chunk_size=65536):
+                            f.write(chunk)
+                    if os.path.getsize(filepath) > 0:
+                        return {'type': 'video', 'files': [filepath], 'caption': title}
+            
+            if image_urls:
+                files = []
+                for i, img_url in enumerate(image_urls[:10]):
+                    filepath = os.path.join(tmp_dir, f'photo_{i}.jpg')
+                    dr = requests.get(img_url, headers=headers, timeout=30)
+                    if dr.status_code == 200:
+                        with open(filepath, 'wb') as f:
+                            f.write(dr.content)
+                        if os.path.getsize(filepath) > 0:
+                            files.append(filepath)
+                
+                if files:
+                    if len(files) == 1:
+                        return {'type': 'photo', 'files': files, 'caption': title}
                     else:
-                        image_url = val
-                    break
-
-        title_m = re.search(r'og:title["\s]+content="([^"]+)"', html)
-        title = title_m.group(1) if title_m else 'Threads post'
-        title = title.replace('&amp;', '&').replace('&#39;', "'").replace('&quot;', '"')
-
-        tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
-        os.makedirs(tmp_dir, exist_ok=True)
-
-        if video_url:
-            filepath = os.path.join(tmp_dir, 'video.mp4')
-            dr = requests.get(video_url, headers=headers, timeout=60, stream=True)
-            if dr.status_code == 200:
-                with open(filepath, 'wb') as f:
-                    for chunk in dr.iter_content(chunk_size=65536):
-                        f.write(chunk)
-                if os.path.getsize(filepath) > 0:
-                    return {'type': 'video', 'files': [filepath], 'caption': title[:1024]}
-
-        if image_url:
-            filepath = os.path.join(tmp_dir, 'photo.jpg')
-            dr = requests.get(image_url, headers=headers, timeout=30)
-            if dr.status_code == 200:
-                with open(filepath, 'wb') as f:
-                    f.write(dr.content)
-                if os.path.getsize(filepath) > 0:
-                    return {'type': 'photo', 'files': [filepath], 'caption': title[:1024]}
-
-        return {'type': 'error', 'error': 'Медиа не найдено в посте'}
+                        return {'type': 'media_group', 'files': files, 'caption': title}
+            
+            return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
     except Exception as e:
         logger.error(f"Threads download error: {e}")
@@ -1629,27 +1639,42 @@ async def process_queue(chat_id, bot, loop):
                     threads_result = await asyncio.get_event_loop().run_in_executor(
                         None, lambda: download_threads_post(task.url)
                     )
-                    if threads_result.get('type') in ('video', 'photo'):
+                        if threads_result.get('type') in ('video', 'photo', 'media_group'):
                         files = threads_result.get('files', [])
                         caption = threads_result.get('caption', '')
-                        for i, fpath in enumerate(files):
+                        if threads_result.get('type') == 'media_group' and len(files) > 1:
                             try:
-                                is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
-                                fobj = FSInputFile(fpath)
-                                cap = caption[:1024] if (i == 0 and caption) else None
-                                if is_video:
-                                    w, h = extract_video_dimensions(fpath)
-                                    send_kwargs = dict(chat_id=chat_id, video=fobj, caption=cap)
-                                    if w and h:
-                                        send_kwargs['width'] = w
-                                        send_kwargs['height'] = h
-                                    await bot.send_video(**send_kwargs)
-                                else:
-                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
-                                if i < len(files) - 1:
-                                    await asyncio.sleep(0.5)
+                                from aiogram.types import InputMediaPhoto, InputMediaVideo
+                                media_group = []
+                                for i, fpath in enumerate(files[:10]):
+                                    is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
+                                    fobj = FSInputFile(fpath)
+                                    if is_video:
+                                        media_group.append(InputMediaVideo(media=fobj, caption=caption[:1024] if i == 0 else None))
+                                    else:
+                                        media_group.append(InputMediaPhoto(media=fobj, caption=caption[:1024] if i == 0 else None))
+                                await bot.send_media_group(chat_id=chat_id, media=media_group)
                             except Exception as e:
-                                logger.error(f"Threads send [{i}] error: {e}")
+                                logger.error(f"Threads media_group send error: {e}")
+                        else:
+                            for i, fpath in enumerate(files):
+                                try:
+                                    is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
+                                    fobj = FSInputFile(fpath)
+                                    cap = caption[:1024] if (i == 0 and caption) else None
+                                    if is_video:
+                                        w, h = extract_video_dimensions(fpath)
+                                        send_kwargs = dict(chat_id=chat_id, video=fobj, caption=cap)
+                                        if w and h:
+                                            send_kwargs['width'] = w
+                                            send_kwargs['height'] = h
+                                        await bot.send_video(**send_kwargs)
+                                    else:
+                                        await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                                    if i < len(files) - 1:
+                                        await asyncio.sleep(0.5)
+                                except Exception as e:
+                                    logger.error(f"Threads send [{i}] error: {e}")
                         task.status = 'done'
                         task.result = {'photos': files}
                     else:
