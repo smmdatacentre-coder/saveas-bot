@@ -1877,7 +1877,8 @@ async def main():
             "<i>Пример: Imagine Dragons Bones</i>\n\n"
             "Можно отправить несколько ссылок подряд —\n"
             "они встанут в очередь.\n\n"
-            "Для YouTube и VK можно выбрать качество."
+            "Для YouTube и VK можно выбрать качество.\n"
+            "📎 скачано с @saverdshot_bot"
         )
         start_kb = ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text="🚀 Старт")]],
