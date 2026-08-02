@@ -2260,35 +2260,75 @@ async def main():
 
             loop = asyncio.get_event_loop()
             ffmpeg_location = get_ffmpeg_location()
-            dl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': outtmpl,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-                'quiet': True,
-                'no_warnings': True,
-                'noplaylist': True,
-                'socket_timeout': 30,
-            }
-            if ffmpeg_location:
-                dl_opts['ffmpeg_location'] = ffmpeg_location
+            
+            downloaded_file = None
+            
+            download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv_embedded'], ['mediaconnect']]
+            for client in download_clients:
+                if downloaded_file:
+                    break
+                try:
+                    dl_opts = {
+                        'format': 'bestaudio/best',
+                        'outtmpl': outtmpl,
+                        'postprocessors': [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': 'mp3',
+                            'preferredquality': '192',
+                        }],
+                        'quiet': True,
+                        'no_warnings': True,
+                        'noplaylist': True,
+                        'socket_timeout': 30,
+                    }
+                    if client:
+                        dl_opts['extractor_args'] = {'youtube': {'player_client': client}}
+                    if ffmpeg_location:
+                        dl_opts['ffmpeg_location'] = ffmpeg_location
 
-            def do_download():
-                with yt_dlp.YoutubeDL(dl_opts) as ydl:
-                    ydl.download([url])
+                    def do_download(c=client):
+                        with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                            ydl.download([url])
 
-            await loop.run_in_executor(None, do_download)
+                    await loop.run_in_executor(None, do_download)
+                    
+                    mp3_files = [f for f in os.listdir(tmp_dir) if f.endswith('.mp3')]
+                    if mp3_files:
+                        downloaded_file = os.path.join(tmp_dir, mp3_files[0])
+                except Exception as e:
+                    logger.warning(f"yt-dlp music client {client} failed: {e}")
+                    continue
 
-            mp3_files = [f for f in os.listdir(tmp_dir) if f.endswith('.mp3')]
-            if not mp3_files:
+            if not downloaded_file:
+                try:
+                    result = download_youtube_innertube(url, audio_only=True)
+                    if result:
+                        fn, title_raw = result
+                        if fn.endswith('.webm'):
+                            remuxed = fn.rsplit('.', 1)[0] + '.mp3'
+                            ffmpeg_path = get_ffmpeg_path()
+                            if ffmpeg_path and os.path.exists(fn):
+                                proc = subprocess.run(
+                                    [ffmpeg_path, '-y', '-i', fn, '-vn', '-ab', '192k', '-ar', '44100', remuxed],
+                                    capture_output=True, text=True, timeout=120
+                                )
+                                if proc.returncode == 0 and os.path.exists(remuxed):
+                                    os.remove(fn)
+                                    downloaded_file = remuxed
+                                else:
+                                    downloaded_file = fn
+                            else:
+                                downloaded_file = fn
+                        else:
+                            downloaded_file = fn
+                except Exception as e:
+                    logger.error(f"Innertube music download failed: {e}")
+
+            if not downloaded_file or not os.path.exists(downloaded_file):
                 await callback.message.edit_text("❌ Не удалось скачать трек")
                 return
 
-            filepath = os.path.join(tmp_dir, mp3_files[0])
-            audio_file = FSInputFile(filepath)
+            audio_file = FSInputFile(downloaded_file)
             cap = f"🎵 {title}\n\n📎 скачано с @saverdshot_bot"
             await bot.send_audio(chat_id=chat_id, audio=audio_file, caption=cap)
             await callback.message.delete()
