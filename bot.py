@@ -1041,22 +1041,47 @@ def _extract_threads_post_data(html, shortcode, username=None):
         snippet = html[carousel_pos:carousel_pos + 50]
         if not snippet.startswith('"carousel_media":null'):
             cb_start = html.find('[', carousel_pos)
-            cb_end = html.find(']', cb_start)
             if cb_start >= 0:
-                carousel_json = html[cb_start:cb_end + 1].replace('\\/', '/')
-                try:
-                    items = json.loads(carousel_json)
-                    for item in items:
-                        if 'video_versions' in item and item['video_versions']:
-                            best = max(item['video_versions'], key=lambda x: x.get('type', 0))
-                            carousel_urls.append(('video', best.get('url', '')))
-                        elif 'image_versions2' in item:
-                            cands = item['image_versions2'].get('candidates', [])
-                            if cands:
-                                best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
-                                carousel_urls.append(('image', best.get('url', '')))
-                except:
-                    pass
+                # Find matching ] for the array, handling nested brackets
+                depth = 0
+                in_str = False
+                esc = False
+                cb_end = -1
+                for ci in range(cb_start, len(html)):
+                    ch = html[ci]
+                    if esc:
+                        esc = False
+                        continue
+                    if ch == '\\':
+                        esc = True
+                        continue
+                    if ch == '"':
+                        in_str = not in_str
+                        continue
+                    if in_str:
+                        continue
+                    if ch == '[':
+                        depth += 1
+                    elif ch == ']':
+                        depth -= 1
+                        if depth == 0:
+                            cb_end = ci
+                            break
+                if cb_end >= 0:
+                    carousel_json = html[cb_start:cb_end + 1].replace('\\/', '/')
+                    try:
+                        items = json.loads(carousel_json)
+                        for item in items:
+                            if 'video_versions' in item and item['video_versions']:
+                                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                                carousel_urls.append(('video', best.get('url', '')))
+                            elif 'image_versions2' in item:
+                                cands = item['image_versions2'].get('candidates', [])
+                                if cands:
+                                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                                    carousel_urls.append(('image', best.get('url', '')))
+                    except:
+                        pass
 
     # If no carousel on post page, try to fetch from user's feed
     if not carousel_urls and username:
@@ -2352,15 +2377,16 @@ async def main():
                         'gl': 'US',
                     }
                 },
-                'query': f'ytsearch{limit}:{query}',
+                'query': query,
+                'params': 'CAEgBggBEAA=',
             }
             resp = await asyncio.wait_for(
                 asyncio.get_event_loop().run_in_executor(
                     None,
                     lambda: requests.post(
-                        'https://www.youtube.com/youtubei/v1/search?key=AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+                        'https://www.youtube.com/youtubei/v1/search?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
                         json=payload,
-                        headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+                        headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'},
                         timeout=15
                     )
                 ),
@@ -2401,7 +2427,11 @@ async def main():
     async def do_music_search(message: Message, query: str):
         await message.answer(f"🔍 Ищу: <b>{query}</b>...", parse_mode=ParseMode.HTML)
 
-        tracks = await yt_music_search(query, limit=10)
+        try:
+            tracks = await asyncio.wait_for(yt_music_search(query, limit=10), timeout=45)
+        except asyncio.TimeoutError:
+            await message.answer("❌ Поиск занял слишком много времени. Попробуйте позже.")
+            return
         if not tracks:
             await message.answer("❌ Ничего не найдено")
             return
@@ -2473,6 +2503,8 @@ async def main():
                         'no_warnings': True,
                         'noplaylist': True,
                         'socket_timeout': 30,
+                        'retries': 5,
+                        'fragment_retries': 5,
                     }
                     if client:
                         dl_opts['extractor_args'] = {'youtube': {'player_client': client}}
@@ -2483,7 +2515,7 @@ async def main():
                         with yt_dlp.YoutubeDL(dl_opts) as ydl:
                             ydl.download([url])
 
-                    await loop.run_in_executor(None, do_download)
+                    await asyncio.wait_for(loop.run_in_executor(None, do_download), timeout=120)
                     
                     mp3_files = [f for f in os.listdir(tmp_dir) if f.endswith('.mp3')]
                     if mp3_files:
