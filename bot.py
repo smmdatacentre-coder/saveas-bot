@@ -871,7 +871,7 @@ GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/b
 
 def _threads_resolve_url(url):
     """Resolve short/share Threads URLs to full permalink."""
-    if '/t/' in url:
+    if '/t/' in url or '/share/' in url:
         try:
             resp = requests.head(url, allow_redirects=True, timeout=10,
                                  headers={'User-Agent': GOOGLEBOT_UA})
@@ -1987,11 +1987,12 @@ async def main():
             "• <i>Для YouTube и VK можно выбрать качество.</i>\n\n"
             "🎵 <b>Поиск музыки:</b> напиши название трека — найду и скачаю!\n"
             "<i>Пример: Imagine Dragons Bones</i>\n\n"
+            "• Threads (видео + фото + карусели) — работает через SSR!\n\n"
             "Можно отправить несколько ссылок подряд —\n"
             "они встанут в очередь."
         )
         start_kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="🚀 Старт")]],
+            keyboard=[[KeyboardButton(text="🟢 Старт")]],
             resize_keyboard=True
         )
         if os.path.exists(welcome_img):
