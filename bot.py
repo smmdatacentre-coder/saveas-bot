@@ -1090,7 +1090,7 @@ def download_video(task, msg_ref, loop, queue=None):
 
                 if getattr(task, 'audio_only', False):
                     mp3_opts = {
-                        'format': 'bestaudio/best',
+                        'format': 'best[ext=mp4]/best',
                         'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
                         'noplaylist': True,
                         'quiet': True,
@@ -1540,10 +1540,10 @@ async def process_queue(chat_id, bot, loop):
                                 )
                                 if link:
                                     text = (
-                                        f"🎬 <b>{tt_result.get('title', '')}</b>\n"
-                                        f"📦 {format_size(tt_result['filesize'])}\n\n"
+                                        f"🎬 <b>{tt_result.get('title', '')}</b>\n\n"
                                         f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
-                                        f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
+                                        f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>\n"
+                                        f"📎 скачано с @saverdshot_bot"
                                     )
                                     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                                 else:
@@ -1628,7 +1628,12 @@ async def process_queue(chat_id, bot, loop):
                         for fpath in videos:
                             try:
                                 fobj = FSInputFile(fpath)
-                                await bot.send_document(chat_id=chat_id, document=fobj, caption=caption[:1024] if caption else None)
+                                w, h = extract_video_dimensions(fpath)
+                                send_kwargs = dict(chat_id=chat_id, video=fobj, caption=caption[:1024] if caption else None)
+                                if w and h:
+                                    send_kwargs['width'] = w
+                                    send_kwargs['height'] = h
+                                await bot.send_video(**send_kwargs)
                             except Exception as e:
                                 logger.error(f"X video send error: {e}")
                         task.status = 'done'
@@ -1656,15 +1661,15 @@ async def process_queue(chat_id, bot, loop):
                             try:
                                 cap = caption_text[:1024] if (i == 0 and caption_text) else None
                                 is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
-                                thumb_path = extract_thumbnail(fpath) if is_video else None
-                                fobj = FSInputFile(fpath)
-                                thumb_obj = FSInputFile(thumb_path) if thumb_path else None
                                 if is_video:
-                                    await bot.send_document(chat_id=chat_id, document=fobj, caption=cap)
+                                    w, h = extract_video_dimensions(fpath)
+                                    send_kwargs = dict(chat_id=chat_id, video=FSInputFile(fpath), caption=cap)
+                                    if w and h:
+                                        send_kwargs['width'] = w
+                                        send_kwargs['height'] = h
+                                    await bot.send_video(**send_kwargs)
                                 else:
-                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
-                                if thumb_path and os.path.exists(thumb_path):
-                                    os.remove(thumb_path)
+                                    await bot.send_photo(chat_id=chat_id, photo=FSInputFile(fpath), caption=cap)
                                 if i < len(photos) - 1:
                                     await asyncio.sleep(0.5)
                             except Exception as e:
@@ -1714,10 +1719,10 @@ async def process_queue(chat_id, bot, loop):
                             )
                             if link:
                                 text = (
-                                    f"🎬 <b>{result.get('title', '')}</b>\n"
-                                    f"📦 {format_size(result['filesize'])}\n\n"
+                                    f"🎬 <b>{result.get('title', '')}</b>\n\n"
                                     f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
-                                    f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
+                                    f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>\n"
+                                    f"📎 скачано с @saverdshot_bot"
                                 )
                                 await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                             else:
@@ -1737,11 +1742,17 @@ async def process_queue(chat_id, bot, loop):
                             audio_file = FSInputFile(result['filename'])
                             await bot.send_audio(chat_id=chat_id, audio=audio_file, caption=f"🎵 {result.get('title', '')[:80]}" if result.get('title') else None)
                         elif is_youtube or is_vk:
-                            doc_file = FSInputFile(result['filename'])
-                            await bot.send_document(
-                                chat_id=chat_id, document=doc_file,
-                                caption=f"🎬 {result.get('title', '')[:80]}\n📦 {format_size(result['filesize'])}"
+                            video_file = FSInputFile(result['filename'])
+                            w, h = extract_video_dimensions(result['filename'])
+                            cap = f"🎬 {result.get('title', '')[:80]}\n\n📎 скачано с @saverdshot_bot"
+                            send_kwargs = dict(
+                                chat_id=chat_id, video=video_file,
+                                caption=cap
                             )
+                            if w and h:
+                                send_kwargs['width'] = w
+                                send_kwargs['height'] = h
+                            await bot.send_video(**send_kwargs)
                         else:
                             desc = result.get('description', '').strip()
                             cap_parts = []
@@ -1749,7 +1760,7 @@ async def process_queue(chat_id, bot, loop):
                                 cap_parts.append(f"👤 {result['uploader']}")
                             if desc:
                                 cap_parts.append(desc[:800])
-                            cap_parts.append(f"📦 {format_size(result['filesize'])}")
+                            cap_parts.append(f"📎 скачано с @saverdshot_bot")
                             cap = '\n\n'.join(cap_parts)
 
                             if is_high_quality:
@@ -1758,10 +1769,10 @@ async def process_queue(chat_id, bot, loop):
                                 )
                                 if link:
                                     text = (
-                                        f"🎬 <b>{result['title']}</b>\n"
-                                        f"📦 {format_size(result['filesize'])}\n\n"
+                                        f"🎬 <b>{result['title']}</b>\n\n"
                                         f"⬇️ <a href=\"{link}\">Скачать видео</a>\n\n"
-                                        f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>"
+                                        f"<i>Открой ссылку → нажми ⋮ → «Загрузить»</i>\n"
+                                        f"📎 скачано с @saverdshot_bot"
                                     )
                                     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                                 else:
