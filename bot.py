@@ -1639,7 +1639,7 @@ async def process_queue(chat_id, bot, loop):
                     threads_result = await asyncio.get_event_loop().run_in_executor(
                         None, lambda: download_threads_post(task.url)
                     )
-                        if threads_result.get('type') in ('video', 'photo', 'media_group'):
+                    if threads_result.get('type') in ('video', 'photo', 'media_group'):
                         files = threads_result.get('files', [])
                         caption = threads_result.get('caption', '')
                         if threads_result.get('type') == 'media_group' and len(files) > 1:
