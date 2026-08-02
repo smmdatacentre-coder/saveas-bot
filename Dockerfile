@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+ARG BUILD_DATE=2026-08-02
+
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \
