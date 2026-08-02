@@ -2154,7 +2154,7 @@ async def main():
         for i, track in enumerate(tracks[:10]):
             title = track.get('title', 'Unknown')
             duration = track.get('duration') or 0
-            dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else ''
+            dur_str = f"{int(duration) // 60}:{int(duration) % 60:02d}" if duration else ''
             text += f"<b>{i+1}.</b> {title} {dur_str}\n"
             keyboard.append([InlineKeyboardButton(
                 text=f"⬇️ {i+1}. {title[:40]}",
