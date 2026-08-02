@@ -866,12 +866,15 @@ def download_x_media(url):
     return {'type': 'error', 'error': 'Не удалось скачать из X/Twitter'}
 
 
+GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+
+
 def _threads_resolve_url(url):
     """Resolve short/share Threads URLs to full permalink."""
-    if 'threads.net/t/' in url or 'threads.com/t/' in url:
+    if '/t/' in url:
         try:
             resp = requests.head(url, allow_redirects=True, timeout=10,
-                                 headers={'User-Agent': 'facebookexternalhit/1.1'})
+                                 headers={'User-Agent': GOOGLEBOT_UA})
             if resp.url and ('/post/' in resp.url or '/@' in resp.url):
                 return resp.url
         except:
@@ -879,134 +882,133 @@ def _threads_resolve_url(url):
     return url
 
 
-def _extract_threads_media_from_json(text):
-    """Extract media URLs from Threads SSR JSON embedded in script tags."""
-    video_urls = []
-    image_urls = []
+def _extract_threads_post_data(html, shortcode):
+    """Extract post media from Googlebot-rendered Threads HTML."""
+    code_pos = html.find(f'"code":"{shortcode}"')
+    if code_pos < 0:
+        return None
+
+    img_pos = html.find('"image_versions2"', code_pos)
+    if img_pos < 0:
+        return None
+
+    img_bracket_start = html.find('[', img_pos)
+    img_bracket_end = html.find(']', img_bracket_start)
+    img_json = html[img_bracket_start:img_bracket_end + 1].replace('\\/', '/')
+    try:
+        imgs = json.loads(img_json)
+    except:
+        return None
+    if not imgs:
+        return None
+
+    best_img = max(imgs, key=lambda x: x.get('width', 0) * x.get('height', 0))
+    img_url = best_img.get('url', '')
+
+    vid_url = None
+    carousel_pos = html.find('"carousel_media"', code_pos)
+    search_end = carousel_pos if carousel_pos > img_pos else img_pos + 80000
+    vid_pos = html.find('"video_versions"', img_pos, search_end)
+
+    if vid_pos >= 0:
+        vb_start = html.find('[', vid_pos)
+        vb_end = html.find(']', vb_start)
+        vid_json = html[vb_start:vb_end + 1].replace('\\/', '/')
+        try:
+            vids = json.loads(vid_json)
+            if vids:
+                best_v = max(vids, key=lambda x: x.get('type', 0))
+                vid_url = best_v.get('url', '')
+        except:
+            pass
+
+    carousel_urls = []
+    if carousel_pos >= 0 and carousel_pos < search_end + 80000:
+        snippet = html[carousel_pos:carousel_pos + 50]
+        if not snippet.startswith('"carousel_media":null'):
+            cb_start = html.find('[', carousel_pos)
+            cb_end = html.find(']', cb_start)
+            if cb_start >= 0:
+                carousel_json = html[cb_start:cb_end + 1].replace('\\/', '/')
+                try:
+                    items = json.loads(carousel_json)
+                    for item in items:
+                        if 'video_versions' in item and item['video_versions']:
+                            best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                            carousel_urls.append(('video', best.get('url', '')))
+                        elif 'image_versions2' in item:
+                            cands = item['image_versions2'].get('candidates', [])
+                            if cands:
+                                best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                                carousel_urls.append(('image', best.get('url', '')))
+                except:
+                    pass
+
+    cap_match = re.search(r'"caption"\s*:\s*\{"text"\s*:\s*"([^"]*)"', html[max(0, code_pos - 5000):code_pos])
     caption = ''
-
-    for pattern in [
-        r'"video_versions"\s*:\s*\[(.*?)\]',
-        r'"video_versions"\s*:\s*\[(.*?)\]\s*,',
-    ]:
-        for m in re.finditer(pattern, text, re.DOTALL):
-            block = '[' + m.group(1) + ']'
-            try:
-                arr = json.loads(block)
-                for item in arr:
-                    vurl = item.get('url', '')
-                    w = item.get('width', 0)
-                    h = item.get('height', 0)
-                    if vurl and vurl.startswith('http'):
-                        video_urls.append((w * h, vurl))
-            except:
-                pass
-
-    for pattern in [
-        r'"image_versions2"\s*:\s*\{"candidates"\s*:\s*\[(.*?)\]\s*\}',
-        r'"image_versions2"\s*:\s*\{"candidates"\s*:\s*\[(.*?)\]',
-    ]:
-        for m in re.finditer(pattern, text, re.DOTALL):
-            block = '[' + m.group(1) + ']'
-            try:
-                arr = json.loads(block)
-                for item in arr:
-                    iurl = item.get('url', '')
-                    w = item.get('width', 0)
-                    h = item.get('height', 0)
-                    if iurl and iurl.startswith('http'):
-                        image_urls.append((w * h, iurl))
-            except:
-                pass
-
-    if not video_urls:
-        for m in re.finditer(r'"url"\s*:\s*"(https://scontent[^"]*\.mp4[^"]*)"', text):
-            video_urls.append((0, m.group(1).replace('\\u0026', '&')))
-
-    if not image_urls:
-        for m in re.finditer(r'"url"\s*:\s*"(https://scontent[^"]*\.(?:jpg|png|webp)[^"]*)"', text):
-            image_urls.append((0, m.group(1).replace('\\u0026', '&')))
-
-    cap_match = re.search(r'"caption"\s*:\s*\{[^}]*"text"\s*:\s*"([^"]*)"', text)
-    if not cap_match:
-        cap_match = re.search(r'"edge_media_to_caption"[^}]*"text"\s*:\s*"([^"]*)"', text)
     if cap_match:
-        caption = cap_match.group(1).replace('\\n', '\n')
+        caption = cap_match.group(1).replace('\\n', '\n').replace('\\u2019', "'")
 
-    video_urls.sort(key=lambda x: x[0], reverse=True)
-    image_urls.sort(key=lambda x: x[0], reverse=True)
-
-    return video_urls, image_urls, caption
+    return {
+        'video_url': vid_url,
+        'image_url': img_url,
+        'caption': caption,
+        'carousel': carousel_urls,
+    }
 
 
 def download_threads_post(url):
-    """Download media from Threads post via SSR HTML parsing (no browser needed)."""
+    """Download media from Threads post via Googlebot SSR (no browser needed)."""
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
 
     try:
         url = _threads_resolve_url(url)
-
-        ua = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)'
-        resp = requests.get(url, headers={'User-Agent': ua}, timeout=20)
+        resp = requests.get(url, headers={'User-Agent': GOOGLEBOT_UA}, timeout=20)
         html = resp.text
 
-        video_urls, image_urls, caption = _extract_threads_media_from_json(html)
+        og = re.search(r'og:url.*?content="https?://[^/]+/(@[^/]+)/post/([^"&]+)', html)
+        if og:
+            shortcode = og.group(2)
+        else:
+            sc_match = re.search(r'/post/([A-Za-z0-9_-]+)', url)
+            shortcode = sc_match.group(1) if sc_match else None
 
-        if not video_urls and not image_urls:
-            soup = BeautifulSoup(html, 'lxml')
+        if not shortcode:
+            return {'type': 'error', 'error': 'Не удалось определить пост'}
 
-            og_video = soup.find('meta', property='og:video')
-            if og_video and og_video.get('content'):
-                video_urls.append((0, og_video['content']))
+        data = _extract_threads_post_data(html, shortcode)
 
-            og_image = soup.find('meta', property='og:image')
-            if og_image and og_image.get('content'):
-                image_urls.append((0, og_image['content']))
-
-        if not video_urls and not image_urls:
-            mobile_ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15'
-            resp2 = requests.get(url, headers={'User-Agent': mobile_ua}, timeout=20)
-            video_urls, image_urls, caption = _extract_threads_media_from_json(resp2.text)
-
-            if not video_urls and not image_urls:
-                soup2 = BeautifulSoup(resp2.text, 'lxml')
-                for tag in soup2.find_all('meta'):
-                    prop = tag.get('property', '') or tag.get('name', '')
-                    val = tag.get('content', '')
-                    if 'video' in prop and val.startswith('http'):
-                        video_urls.append((0, val))
-                    elif 'image' in prop and val.startswith('http'):
-                        image_urls.append((0, val))
+        if not data:
+            return {'type': 'error', 'error': 'Медиа не найдено в посте (SSR)'}
 
         media_urls = []
-        for _, vu in video_urls[:1]:
-            media_urls.append(vu)
-        for _, iu in image_urls[:10]:
-            if iu not in media_urls:
-                media_urls.append(iu)
+        if data['carousel']:
+            for mtype, murl in data['carousel']:
+                if murl:
+                    media_urls.append((mtype, murl))
+        elif data['video_url']:
+            media_urls.append(('video', data['video_url']))
+        elif data['image_url']:
+            media_urls.append(('image', data['image_url']))
 
         if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
-        caption_text = caption or 'Threads post'
+        caption_text = data['caption'] or 'Threads post'
         full_caption = f"{caption_text[:500]}\n\n📎 скачано с @saverdshot_bot"
 
         dl_headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'User-Agent': GOOGLEBOT_UA,
             'Referer': 'https://www.threads.com/',
         }
 
         files = []
-        for i, media_url in enumerate(media_urls[:10]):
+        for i, (mtype, murl) in enumerate(media_urls[:10]):
             try:
-                dr = requests.get(media_url, headers=dl_headers, timeout=60, stream=True)
+                dr = requests.get(murl, headers=dl_headers, timeout=60, stream=True)
                 if dr.status_code == 200:
-                    ct = dr.headers.get('content-type', '')
-                    if '.mp4' in media_url or 'video' in ct:
-                        ext = 'mp4'
-                    else:
-                        ext = 'jpg'
+                    ext = 'mp4' if mtype == 'video' else 'jpg'
                     filepath = os.path.join(tmp_dir, f'media_{i}.{ext}')
                     with open(filepath, 'wb') as f:
                         for chunk in dr.iter_content(chunk_size=65536):
@@ -1020,7 +1022,7 @@ def download_threads_post(url):
             return {'type': 'error', 'error': 'Не удалось скачать медиа'}
 
         has_video = any(f.lower().endswith('.mp4') for f in files)
-        if has_video:
+        if has_video and len(files) == 1:
             return {'type': 'video', 'files': files, 'caption': full_caption[:1024]}
         elif len(files) == 1:
             return {'type': 'photo', 'files': files, 'caption': full_caption[:1024]}
