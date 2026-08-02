@@ -867,15 +867,13 @@ def download_x_media(url):
 
 
 def download_threads_post(url):
-    """Download media from Threads post by parsing embedded JSON in HTML."""
-    import json as _json
-    
+    """Download media from Threads post by parsing HTML with mobile UA."""
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
     
     try:
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.9',
         }
@@ -884,6 +882,8 @@ def download_threads_post(url):
             return {'type': 'error', 'error': f'HTTP {resp.status_code}'}
         
         html = resp.text
+        final_url = resp.url
+        
         title = 'Threads post'
         title_m = re.search(r'og:title["\s]+content="([^"]+)"', html)
         if title_m:
@@ -891,53 +891,49 @@ def download_threads_post(url):
         
         media_urls = []
         
-        for pattern in [
-            r'"video_url"\s*:\s*"([^"]+)"',
-            r'"url"\s*:\s*"(https://scontent[^"]+\.mp4[^"]*)"',
-            r'"src"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
-            r'"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"',
-        ]:
-            matches = re.findall(pattern, html)
-            for m in matches:
-                val = m.replace('\\u0026', '&').replace('&amp;', '&')
-                if val not in media_urls:
-                    media_urls.append(val)
-        
-        if not media_urls:
-            for pattern in [
-                r'"image_versions2"\s*:\s*\{[^}]*"candidates"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"',
-                r'"carousel_media"\s*:\s*\[(.*?)\]',
-            ]:
-                m = re.search(pattern, html, re.DOTALL)
-                if m:
-                    if 'carousel_media' in pattern:
-                        urls = re.findall(r'"url"\s*:\s*"([^"]+)"', m.group(1))
-                        for u in urls:
-                            val = u.replace('\\u0026', '&').replace('&amp;', '&')
-                            if val not in media_urls:
-                                media_urls.append(val)
-                    else:
-                        val = m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
-                        if val not in media_urls:
-                            media_urls.append(val)
-        
-        if not media_urls:
-            og_video = re.search(r'og:video["\s]+content="([^"]+)"', html)
-            if og_video:
-                media_urls.append(og_video.group(1).replace('&amp;', '&'))
+        og_video = re.search(r'og:video["\s]+content="([^"]+)"', html)
+        if og_video:
+            url_val = og_video.group(1).replace('&amp;', '&')
+            media_urls.append(url_val)
         
         if not media_urls:
             og_image = re.search(r'og:image["\s]+content="([^"]+)"', html)
             if og_image:
-                media_urls.append(og_image.group(1).replace('&amp;', '&'))
+                url_val = og_image.group(1).replace('&amp;', '&')
+                media_urls.append(url_val)
+        
+        if not media_urls:
+            for pattern in [
+                r'"video_url"\s*:\s*"([^"]+)"',
+                r'"url"\s*:\s*"(https://scontent[^"]+)"',
+                r'"src"\s*:\s*"(https://scontent[^"]+)"',
+            ]:
+                matches = re.findall(pattern, html)
+                for m in matches:
+                    val = m.replace('\\u0026', '&').replace('&amp;', '&')
+                    if val not in media_urls:
+                        media_urls.append(val)
+        
+        if not media_urls:
+            scontent_urls = re.findall(r'https://scontent[^"&\s]+', html)
+            seen = set()
+            for u in scontent_urls:
+                clean = u.split('?')[0]
+                if clean not in seen and '/v/' in u:
+                    seen.add(clean)
+                    decoded = u.replace('&amp;', '&')
+                    media_urls.append(decoded)
         
         if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
         
         files = []
+        dl_headers = {
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
+        }
         for i, media_url in enumerate(media_urls[:10]):
             try:
-                dr = requests.get(media_url, headers=headers, timeout=60, stream=True)
+                dr = requests.get(media_url, headers=dl_headers, timeout=60, stream=True)
                 if dr.status_code == 200:
                     ct = dr.headers.get('content-type', '')
                     if '.mp4' in media_url or 'video' in ct:
