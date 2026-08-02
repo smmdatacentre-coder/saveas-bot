@@ -867,7 +867,7 @@ def download_x_media(url):
 
 
 def download_threads_post(url):
-    """Download media from Threads post using Playwright headless browser."""
+    """Download media from Threads post using Playwright with network interception."""
     from playwright.sync_api import sync_playwright
     
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
@@ -877,7 +877,7 @@ def download_threads_post(url):
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required']
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             )
             context = browser.new_context(
                 user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
@@ -885,6 +885,20 @@ def download_threads_post(url):
                 is_mobile=True,
             )
             page = context.new_page()
+            
+            captured_media = []
+            
+            def handle_response(response):
+                try:
+                    ct = response.headers.get('content-type', '')
+                    url_str = response.url
+                    if 'scontent' in url_str and ('video' in ct or 'image' in ct):
+                        if url_str not in captured_media:
+                            captured_media.append(url_str)
+                except:
+                    pass
+            
+            page.on('response', handle_response)
             
             page.goto(url, wait_until='domcontentloaded', timeout=30000)
             page.wait_for_timeout(2000)
@@ -894,58 +908,37 @@ def download_threads_post(url):
             except:
                 pass
             
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(2000)
             
             try:
-                play_btn = page.query_selector('div[aria-label="Play"]')
+                play_btn = page.query_selector('[aria-label="Play"]') or page.query_selector('[data-pressable-container]')
                 if play_btn:
                     play_btn.click()
-                    page.wait_for_timeout(2000)
+                    page.wait_for_timeout(3000)
             except:
                 pass
             
+            page.wait_for_timeout(3000)
+            
             media_data = page.evaluate('''() => {
-                const result = {video: null, images: [], caption: '', title: document.title};
+                const result = {video: null, images: [], caption: ''};
                 
                 const article = document.querySelector('article');
                 if (!article) return result;
                 
                 const videos = article.querySelectorAll('video');
                 for (const v of videos) {
-                    if (v.src) { result.video = v.src; break; }
+                    if (v.src && v.src.startsWith('http')) { result.video = v.src; break; }
                     const source = v.querySelector('source');
-                    if (source && source.src) { result.video = source.src; break; }
+                    if (source && source.src && source.src.startsWith('http')) { result.video = source.src; break; }
                 }
                 
-                const playButtons = article.querySelectorAll('[data-pressable-container="true"]');
-                for (const btn of playButtons) {
-                    const video = btn.querySelector('video');
-                    if (video) {
-                        if (video.src) result.video = video.src;
-                        else {
-                            const src = video.querySelector('source');
-                            if (src) result.video = src.src;
-                        }
-                    }
-                }
-                
-                const imgs = article.querySelectorAll('img');
+                const imgs = article.querySelectorAll('img[src]');
                 for (const img of imgs) {
-                    const src = img.src || img.getAttribute('src');
+                    const src = img.src;
                     if (src && src.includes('scontent') && !src.includes('profile') && 
-                        !src.includes('avatar') && !src.includes('rsrc.php') &&
-                        !src.includes('emoji') && !src.includes('72x72')) {
+                        !src.includes('avatar') && !src.includes('rsrc.php')) {
                         if (!result.images.includes(src)) result.images.push(src);
-                    }
-                }
-                
-                const textEls = article.querySelectorAll('span[dir="auto"], div[dir="auto"]');
-                for (const el of textEls) {
-                    const t = el.textContent?.trim();
-                    if (t && t.length > 5 && !t.includes(' likes') && !t.includes(' replies') &&
-                        !t.includes(' reposts') && !t.includes(' @') && t !== result.title) {
-                        result.caption = t;
-                        break;
                     }
                 }
                 
@@ -956,11 +949,21 @@ def download_threads_post(url):
             
             video_url = media_data.get('video')
             image_urls = media_data.get('images', [])
-            post_text = media_data.get('caption', '')[:1024]
-            title = media_data.get('title', 'Threads post')
             
-            caption = post_text if post_text else title
-            caption = caption[:1020] + '\n\n📎 скачано с @saverdshot_bot' if post_text else f'{title[:500]}\n\n📎 скачано с @saverdshot_bot'
+            if not video_url:
+                for cm in captured_media:
+                    if 'video' in cm or '.mp4' in cm:
+                        video_url = cm
+                        break
+            
+            if not image_urls:
+                for cm in captured_media:
+                    if ('image' in cm or '.jpg' in cm or '.png' in cm) and 'scontent' in cm:
+                        if cm not in image_urls:
+                            image_urls.append(cm)
+            
+            title = media_data.get('caption', '') or 'Threads post'
+            caption = f"{title[:500]}\n\n📎 скачано с @saverdshot_bot"
             
             media_urls = []
             if video_url:
