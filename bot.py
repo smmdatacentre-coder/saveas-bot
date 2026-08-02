@@ -1762,7 +1762,8 @@ async def main():
             "• Instagram (рилсы + карусели)\n"
             "• TikTok (видео + карусели)\n"
             "• X/Twitter (видео + фото + текст)\n"
-            "• Rutube\n\n"
+            "• Rutube\n"
+            "• 🎵 Музыка (VK Music)\n\n"
             "Можно отправить несколько ссылок подряд —\n"
             "они встанут в очередь.\n\n"
             "Для YouTube и VK можно выбрать качество."
@@ -1958,6 +1959,183 @@ async def main():
         pending_vk.pop(str(chat_id), None)
 
         ensure_queue_worker(chat_id, bot, loop)
+
+    VK_MUSIC_LOGIN = os.environ.get('VK_MUSIC_LOGIN', '')
+    VK_MUSIC_PASSWORD = os.environ.get('VK_MUSIC_PASSWORD', '')
+    vk_music_client = None
+
+    def get_vk_music_client():
+        nonlocal vk_music_client
+        if vk_music_client is not None:
+            return vk_music_client
+        if not VK_MUSIC_LOGIN or not VK_MUSIC_PASSWORD:
+            return None
+        try:
+            from vkmusix import Client
+            vk_music_client = Client(login=VK_MUSIC_LOGIN, password=VK_MUSIC_PASSWORD)
+            return vk_music_client
+        except Exception as e:
+            logger.error(f"VK Music init error: {e}")
+            return None
+
+    music_search_cache = {}
+
+    async def vk_music_search(query, offset=0, limit=10):
+        client = get_vk_music_client()
+        if not client:
+            return None
+        try:
+            loop = asyncio.get_event_loop()
+            tracks = await loop.run_in_executor(
+                None,
+                lambda: client.searchTracks(query=query, limit=limit, offset=offset)
+            )
+            return tracks
+        except Exception as e:
+            logger.error(f"VK Music search error: {e}")
+            return None
+
+    @dp.message(F.text.startswith('/music'))
+    async def cmd_music(message: Message):
+        query = message.text.replace('/music', '').strip()
+        if not query:
+            await message.answer(
+                "🎵 <b>Поиск музыки</b>\n\n"
+                "Отправь название трека или исполнителя:\n"
+                "<code>/music Imagine Dragons</code>",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        if not VK_MUSIC_LOGIN or not VK_MUSIC_PASSWORD:
+            await message.answer("❌ VK Music не настроен. Нужны VK_MUSIC_LOGIN и VK_MUSIC_PASSWORD в env vars.")
+            return
+
+        await message.answer(f"🔍 Ищу: <b>{query}</b>...", parse_mode=ParseMode.HTML)
+
+        tracks = await vk_music_search(query, offset=0)
+        if not tracks:
+            await message.answer("❌ Ничего не найдено или ошибка VK Music API")
+            return
+
+        music_search_cache[str(message.chat.id)] = {
+            'query': query,
+            'offset': 0,
+            'tracks': tracks,
+        }
+
+        text = f"🎵 <b>Результаты поиска:</b> {query}\n\n"
+        keyboard = []
+        for i, track in enumerate(tracks[:10]):
+            title = getattr(track, 'title', str(track))
+            artist = getattr(track, 'artist', '')
+            duration = getattr(track, 'duration', 0)
+            dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else ''
+            text += f"<b>{i+1}.</b> {artist} — {title} {dur_str}\n"
+            keyboard.append([InlineKeyboardButton(
+                text=f"⬇️ {i+1}. {artist[:20]} — {title[:30]}",
+                callback_data=f"mus_dl_{i}"
+            )])
+
+        if len(tracks) > 10:
+            keyboard.append([InlineKeyboardButton(
+                text="🔄 Еще варианты",
+                callback_data="mus_more"
+            )])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+    @dp.callback_query(F.data.startswith('mus_dl_'))
+    async def handle_music_download(callback: CallbackQuery):
+        idx = int(callback.data.split('_')[2])
+        chat_id = callback.message.chat.id
+        cache = music_search_cache.get(str(chat_id))
+        if not cache or idx >= len(cache['tracks']):
+            await callback.answer("Ссылка устарела", show_alert=True)
+            return
+
+        track = cache['tracks'][idx]
+        title = getattr(track, 'title', 'track')
+        artist = getattr(track, 'artist', '')
+        track_url = getattr(track, 'url', None)
+
+        if not track_url:
+            await callback.answer("❌ Трек недоступен для скачивания", show_alert=True)
+            return
+
+        await callback.message.edit_text(f"⬇️ Скачиваю: {artist} — {title}...")
+
+        try:
+            tmp_dir = os.path.join(DOWNLOAD_DIR, f"music_{uuid.uuid4().hex[:8]}")
+            os.makedirs(tmp_dir, exist_ok=True)
+            filepath = os.path.join(tmp_dir, f"{artist} - {title}.mp3".replace('/', '_').replace('\\', '_'))
+
+            loop = asyncio.get_event_loop()
+            client = get_vk_music_client()
+            downloaded = await loop.run_in_executor(
+                None,
+                lambda: client.download(link=track_url, path=filepath)
+            )
+
+            if not downloaded or not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+                r = requests.get(track_url, timeout=30)
+                if r.status_code == 200 and len(r.content) > 1000:
+                    with open(filepath, 'wb') as f:
+                        f.write(r.content)
+                else:
+                    await callback.message.edit_text("❌ Не удалось скачать трек")
+                    return
+
+            audio_file = FSInputFile(filepath)
+            cap = f"🎵 {artist} — {title}\n\n📎 скачано с @saverdshot_bot"
+            await bot.send_audio(chat_id=chat_id, audio=audio_file, caption=cap)
+            await callback.message.delete()
+
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except Exception as e:
+            logger.error(f"Music download error: {e}")
+            await callback.message.edit_text(f"❌ Ошибка скачивания: {str(e)[:100]}")
+
+    @dp.callback_query(F.data == 'mus_more')
+    async def handle_music_more(callback: CallbackQuery):
+        chat_id = callback.message.chat.id
+        cache = music_search_cache.get(str(chat_id))
+        if not cache:
+            await callback.answer("Ссылка устарела", show_alert=True)
+            return
+
+        new_offset = cache['offset'] + 10
+        tracks = await vk_music_search(cache['query'], offset=new_offset)
+        if not tracks:
+            await callback.answer("Больше нет результатов", show_alert=True)
+            return
+
+        cache['offset'] = new_offset
+        cache['tracks'] = tracks
+        music_search_cache[str(chat_id)] = cache
+
+        text = f"🎵 <b>Результаты поиска:</b> {cache['query']}\n\n"
+        keyboard = []
+        for i, track in enumerate(tracks[:10]):
+            title = getattr(track, 'title', str(track))
+            artist = getattr(track, 'artist', '')
+            duration = getattr(track, 'duration', 0)
+            dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else ''
+            text += f"<b>{i+1}.</b> {artist} — {title} {dur_str}\n"
+            keyboard.append([InlineKeyboardButton(
+                text=f"⬇️ {i+1}. {artist[:20]} — {title[:30]}",
+                callback_data=f"mus_dl_{i}"
+            )])
+
+        keyboard.append([InlineKeyboardButton(
+            text="🔄 Еще варианты",
+            callback_data="mus_more"
+        )])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=keyboard)
+        await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
     print("🚀 Бот запущен!")
     await dp.start_polling(bot)
