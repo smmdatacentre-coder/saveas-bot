@@ -867,82 +867,102 @@ def download_x_media(url):
 
 
 def download_threads_post(url):
-    """Download media from Threads post using Playwright headless browser."""
-    from playwright.sync_api import sync_playwright
+    """Download media from Threads post by parsing embedded JSON in HTML."""
     import json as _json
     
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
     
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
-            context = browser.new_context(
-                user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-                viewport={'width': 390, 'height': 844}
-            )
-            page = context.new_page()
-            
-            page.goto(url, wait_until='networkidle', timeout=30000)
-            
-            page.wait_for_timeout(3000)
-            
-            media_urls = page.evaluate('''() => {
-                const article = document.querySelector('article');
-                if (!article) return {video: null, images: [], text: document.title};
-                
-                const video = article.querySelector('video source, video');
-                const videoUrl = video ? (video.src || video.querySelector('source')?.src) : null;
-                
-                const imgs = Array.from(article.querySelectorAll('img'));
-                const imageUrls = imgs
-                    .map(img => img.src)
-                    .filter(src => src && !src.includes('profile') && !src.includes('avatar') && !src.includes('scontent-static'));
-                
-                const textEl = article.querySelector('[data-pressable-container="true"] span, div[dir="auto"]');
-                const text = textEl ? textEl.textContent : document.querySelector('meta[property="og:description"]')?.content || '';
-                
-                return {video: videoUrl, images: imageUrls, text: text};
-            }''')
-            
-            browser.close()
-            
-            video_url = media_urls.get('video')
-            image_urls = media_urls.get('images', [])
-            title = media_urls.get('text', 'Threads post')[:1024]
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-            }
-            
-            if video_url:
-                filepath = os.path.join(tmp_dir, 'video.mp4')
-                dr = requests.get(video_url, headers=headers, timeout=60, stream=True)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+        resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+        if resp.status_code != 200:
+            return {'type': 'error', 'error': f'HTTP {resp.status_code}'}
+        
+        html = resp.text
+        title = 'Threads post'
+        title_m = re.search(r'og:title["\s]+content="([^"]+)"', html)
+        if title_m:
+            title = title_m.group(1).replace('&amp;', '&').replace('&#39;', "'").replace('&quot;', '"')
+        
+        media_urls = []
+        
+        for pattern in [
+            r'"video_url"\s*:\s*"([^"]+)"',
+            r'"url"\s*:\s*"(https://scontent[^"]+\.mp4[^"]*)"',
+            r'"src"\s*:\s*"(https://[^"]+\.mp4[^"]*)"',
+            r'"video_versions"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"',
+        ]:
+            matches = re.findall(pattern, html)
+            for m in matches:
+                val = m.replace('\\u0026', '&').replace('&amp;', '&')
+                if val not in media_urls:
+                    media_urls.append(val)
+        
+        if not media_urls:
+            for pattern in [
+                r'"image_versions2"\s*:\s*\{[^}]*"candidates"\s*:\s*\[\s*\{[^}]*"url"\s*:\s*"([^"]+)"',
+                r'"carousel_media"\s*:\s*\[(.*?)\]',
+            ]:
+                m = re.search(pattern, html, re.DOTALL)
+                if m:
+                    if 'carousel_media' in pattern:
+                        urls = re.findall(r'"url"\s*:\s*"([^"]+)"', m.group(1))
+                        for u in urls:
+                            val = u.replace('\\u0026', '&').replace('&amp;', '&')
+                            if val not in media_urls:
+                                media_urls.append(val)
+                    else:
+                        val = m.group(1).replace('\\u0026', '&').replace('&amp;', '&')
+                        if val not in media_urls:
+                            media_urls.append(val)
+        
+        if not media_urls:
+            og_video = re.search(r'og:video["\s]+content="([^"]+)"', html)
+            if og_video:
+                media_urls.append(og_video.group(1).replace('&amp;', '&'))
+        
+        if not media_urls:
+            og_image = re.search(r'og:image["\s]+content="([^"]+)"', html)
+            if og_image:
+                media_urls.append(og_image.group(1).replace('&amp;', '&'))
+        
+        if not media_urls:
+            return {'type': 'error', 'error': 'Медиа не найдено в посте'}
+        
+        files = []
+        for i, media_url in enumerate(media_urls[:10]):
+            try:
+                dr = requests.get(media_url, headers=headers, timeout=60, stream=True)
                 if dr.status_code == 200:
+                    ct = dr.headers.get('content-type', '')
+                    if '.mp4' in media_url or 'video' in ct:
+                        ext = 'mp4'
+                    else:
+                        ext = 'jpg'
+                    filepath = os.path.join(tmp_dir, f'media_{i}.{ext}')
                     with open(filepath, 'wb') as f:
                         for chunk in dr.iter_content(chunk_size=65536):
                             f.write(chunk)
                     if os.path.getsize(filepath) > 0:
-                        return {'type': 'video', 'files': [filepath], 'caption': title}
-            
-            if image_urls:
-                files = []
-                for i, img_url in enumerate(image_urls[:10]):
-                    filepath = os.path.join(tmp_dir, f'photo_{i}.jpg')
-                    dr = requests.get(img_url, headers=headers, timeout=30)
-                    if dr.status_code == 200:
-                        with open(filepath, 'wb') as f:
-                            f.write(dr.content)
-                        if os.path.getsize(filepath) > 0:
-                            files.append(filepath)
-                
-                if files:
-                    if len(files) == 1:
-                        return {'type': 'photo', 'files': files, 'caption': title}
-                    else:
-                        return {'type': 'media_group', 'files': files, 'caption': title}
-            
-            return {'type': 'error', 'error': 'Медиа не найдено в посте'}
+                        files.append(filepath)
+            except Exception as e:
+                logger.error(f"Threads media download [{i}]: {e}")
+        
+        if not files:
+            return {'type': 'error', 'error': 'Не удалось скачать медиа'}
+        
+        has_video = any(f.lower().endswith('.mp4') for f in files)
+        if has_video:
+            return {'type': 'video', 'files': files, 'caption': title[:1024]}
+        elif len(files) == 1:
+            return {'type': 'photo', 'files': files, 'caption': title[:1024]}
+        else:
+            return {'type': 'media_group', 'files': files, 'caption': title[:1024]}
 
     except Exception as e:
         logger.error(f"Threads download error: {e}")

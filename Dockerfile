@@ -1,15 +1,10 @@
 FROM python:3.11-slim
 
-ARG BUILD_DATE=2026-08-02-v4
+ARG BUILD_DATE=2026-08-02-v5
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl xz-utils \
-    libxfixes3 libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 \
-    libgbm1 libasound2 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
-    libcups2 libdrm2 libpango-1.0-0 libcairo2 libatspi2.0-0 libxshmfence1 \
-    && rm -rf /var/lib/apt/lists/* \
+RUN apt-get update && apt-get install -y --no-install-recommends curl xz-utils && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /tmp/ffmpeg-src \
     && curl -sL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz | tar -xJf - -C /tmp/ffmpeg-src \
     && cp /tmp/ffmpeg-src/ffmpeg-*-amd64-static/ffmpeg /usr/local/bin/ \
@@ -19,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /tmp/ffmpeg-src
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && playwright install chromium
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 RUN python -m py_compile bot.py && echo "Syntax OK"
