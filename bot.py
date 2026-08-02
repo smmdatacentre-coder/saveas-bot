@@ -125,10 +125,19 @@ def detect_platform(url):
     return 'unknown'
 
 
+def url_to_title(url):
+    short = url.replace('https://', '').replace('http://', '')
+    short = short.split('?')[0].split('/')[-1]
+    if len(short) > 30:
+        short = short[:30] + '...'
+    return short or url[:40]
+
+
 class DownloadTask:
-    def __init__(self, url, quality=None):
+    def __init__(self, url, quality=None, title=''):
         self.url = url
         self.quality = quality
+        self.title = title
         self.status = 'waiting'
         self.progress = ''
         self.filename = None
@@ -1392,6 +1401,7 @@ def download_video(task, msg_ref, loop, queue=None):
                         return {'error': 'Не удалось получить информацию'}
                     title = info.get('title', '')
                     vid_id = info.get('id', '')
+                track.title = title[:80] if title else ''
                 tracker.title = title[:40] if title else ''
 
                 dl_dir = DOWNLOAD_DIR
@@ -1478,6 +1488,7 @@ def download_video(task, msg_ref, loop, queue=None):
                     if not info:
                         return {'error': 'Не удалось получить информацию'}
                     title = info.get('title', '')
+                    task.title = title[:80] if title else ''
                     vid_id = info.get('id', '')
                     fn_list = glob.glob(os.path.join(DOWNLOAD_DIR, f'{vid_id}.*'))
                     if not fn_list:
@@ -1697,7 +1708,8 @@ def build_queue_text(queue):
             status = 'ожидание'
         platform = detect_platform(task.url)
         picon = {'youtube': '▶️', 'vk': 'VK', 'instagram': 'IG', 'tiktok': '🎵', 'ok': 'OK', 'rutube': 'RT'}.get(platform, '🔗')
-        lines.append(f"{icon} {i}. {picon} {status}")
+        title = task.title[:50] if task.title else url_to_title(task.url)
+        lines.append(f"{icon} {i}. {picon} {title} — {status}")
     return '\n'.join(lines)
 
 
@@ -2226,7 +2238,7 @@ async def main():
                         )])
                     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
                     title = info.get('title', '')[:80] if info else ''
-                    pending_yt[str(chat_id)] = {'url': url}
+                    pending_yt[str(chat_id)] = {'url': url, 'title': title}
                     await message.answer(
                         f"🎬 <b>{title}</b>\n\nВыбери качество:",
                         parse_mode=ParseMode.HTML,
@@ -2249,7 +2261,7 @@ async def main():
                         )])
                     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
                     title = info.get('title', '')[:80] if info else ''
-                    pending_vk[str(chat_id)] = {'url': url}
+                    pending_vk[str(chat_id)] = {'url': url, 'title': title}
                     await message.answer(
                         f"🎬 <b>{title}</b>\n\nВыбери качество:",
                         parse_mode=ParseMode.HTML,
@@ -2296,7 +2308,8 @@ async def main():
         if chat_id not in user_locks:
             user_locks[chat_id] = asyncio.Lock()
 
-        task = DownloadTask(url, quality=quality)
+        title = pending.get('title', '')
+        task = DownloadTask(url, quality=quality, title=title)
         user_queues[chat_id].append(task)
 
         await callback.message.edit_text(f"✅ {quality} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
@@ -2320,7 +2333,8 @@ async def main():
             await callback.answer("Ссылка устарела", show_alert=True)
             return
 
-        url = pending['url']
+        url = pending.get('url', pending.get('Url', ''))
+        title = pending.get('title', '')
         await callback.answer()
 
         if chat_id not in user_queues:
@@ -2328,7 +2342,7 @@ async def main():
         if chat_id not in user_locks:
             user_locks[chat_id] = asyncio.Lock()
 
-        task = DownloadTask(url, quality=quality)
+        task = DownloadTask(url, quality=quality, title=title)
         user_queues[chat_id].append(task)
 
         await callback.message.edit_text(f"✅ {quality} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
