@@ -124,10 +124,9 @@ def detect_platform(url):
 
 
 class DownloadTask:
-    def __init__(self, url, quality=None, audio_only=False):
+    def __init__(self, url, quality=None):
         self.url = url
         self.quality = quality
-        self.audio_only = audio_only
         self.status = 'waiting'
         self.progress = ''
         self.filename = None
@@ -266,11 +265,6 @@ def get_youtube_formats(url):
             'label': f"🎬 {max_h}p",
             'quality': f"{max_h}p",
         })
-    formats.append({
-        'height': 0,
-        'label': "🎵 MP3",
-        'quality': "mp3",
-    })
     return info, formats
 
 
@@ -1088,97 +1082,6 @@ def download_video(task, msg_ref, loop, queue=None):
                 ffmpeg_location = get_ffmpeg_location()
                 download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
 
-                if getattr(task, 'audio_only', False):
-                    mp3_opts = {
-                        'format': 'best[ext=mp4]/best',
-                        'outtmpl': f'{dl_dir}/{vid_id}.%(ext)s',
-                        'noplaylist': True,
-                        'quiet': True,
-                        'no_warnings': True,
-                        'socket_timeout': 30,
-                        'progress_hooks': [tracker.hook],
-                    }
-                    for cli_idx, client in enumerate(download_clients):
-                        try:
-                            mp3_dl = dict(mp3_opts)
-                            if client:
-                                mp3_dl['extractor_args'] = {'youtube': {'player_client': client}}
-                            with yt_dlp.YoutubeDL(mp3_dl) as ydl:
-                                ydl.download([url])
-                            break
-                        except Exception as dl_err:
-                            if cli_idx == len(download_clients) - 1:
-                                logger.warning("All yt-dlp MP3 clients failed, trying innertube API...")
-                                innertube_result = download_youtube_innertube(url, audio_only=True)
-                                if innertube_result:
-                                    fn, title = innertube_result
-                                    if not fn.lower().endswith('.mp3'):
-                                        audio_fn = fn.rsplit('.', 1)[0] + '.mp3'
-                                        proc = subprocess.run(
-                                            [ffmpeg_path, '-y', '-i', fn, '-vn',
-                                             '-acodec', 'libmp3lame', '-ab', '320k',
-                                             '-ar', '44100', audio_fn],
-                                            capture_output=True, text=True, timeout=300
-                                        )
-                                        if proc.returncode == 0 and os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
-                                            os.remove(fn)
-                                            fn = audio_fn
-                                    tracker.done()
-                                    return {
-                                        'filename': fn,
-                                        'title': title or 'Audio',
-                                        'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
-                                        'filesize': os.path.getsize(fn),
-                                        'description': ((info.get('description', '') or '')[:1000] if info else ''),
-                                        'audio_only': True,
-                                    }
-                                raise
-                            continue
-                    tracker.done()
-                    audio_exts = ('.mp3', '.m4a', '.webm', '.ogg', '.opus', '.wav', '.aac')
-                    fn_list = [f for f in glob.glob(os.path.join(dl_dir, f'{vid_id}.*')) if f.lower().endswith(audio_exts)]
-                    if not fn_list:
-                        fn_list = glob.glob(os.path.join(dl_dir, f'{vid_id}.*'))
-                    if not fn_list:
-                        return {'error': 'Файл не найден'}
-                    fn = fn_list[0]
-                    if not ffmpeg_path or not (os.path.exists(ffmpeg_path) or shutil.which('ffmpeg')):
-                        if not fn.lower().endswith(('.mp3',)):
-                            os.remove(fn)
-                            return {'error': 'MP3 требует ffmpeg на сервере'}
-                    if not fn.lower().endswith('.mp3'):
-                        audio_fn = fn.rsplit('.', 1)[0] + '.mp3'
-                        try:
-                            proc = subprocess.run(
-                                [ffmpeg_path, '-y', '-i', fn, '-vn',
-                                 '-acodec', 'libmp3lame', '-ab', '320k',
-                                 '-ar', '44100', audio_fn],
-                                capture_output=True, text=True, timeout=300
-                            )
-                            if proc.returncode != 0:
-                                logger.error(f"ffmpeg MP3 error: {proc.stderr[:300]}")
-                                os.remove(fn)
-                                return {'error': f'MP3 конвертация не удалась: {proc.stderr[:100]}'}
-                            if os.path.exists(audio_fn) and os.path.getsize(audio_fn) > 0:
-                                os.remove(fn)
-                                fn = audio_fn
-                            else:
-                                os.remove(fn)
-                                return {'error': 'MP3: ffmpeg создал пустой файл'}
-                        except Exception as e:
-                            logger.error(f"ffmpeg MP3 exception: {e}")
-                            if os.path.exists(fn):
-                                os.remove(fn)
-                            return {'error': f'MP3 ошибка: {str(e)[:100]}'}
-                    return {
-                        'filename': fn,
-                        'title': title or 'Audio',
-                        'uploader': (info.get('uploader', '') or info.get('channel', '')) if info else '',
-                        'filesize': os.path.getsize(fn),
-                        'description': ((info.get('description', '') or '')[:1000] if info else ''),
-                        'audio_only': True,
-                    }
-
                 is_short = '/shorts/' in url
                 dl_dir = DOWNLOAD_DIR
 
@@ -1738,9 +1641,6 @@ async def process_queue(chat_id, bot, loop):
                                 send_kwargs['width'] = w
                                 send_kwargs['height'] = h
                             await bot.send_video(**send_kwargs)
-                        elif result.get('audio_only'):
-                            audio_file = FSInputFile(result['filename'])
-                            await bot.send_audio(chat_id=chat_id, audio=audio_file, caption=f"🎵 {result.get('title', '')[:80]}" if result.get('title') else None)
                         elif is_youtube or is_vk:
                             video_file = FSInputFile(result['filename'])
                             w, h = extract_video_dimensions(result['filename'])
@@ -1857,7 +1757,7 @@ async def main():
             "🎬 <b>Saver_bot от dshot.ru</b>\n\n"
             "Отправь ссылку на видео — скачаю!\n\n"
             "Поддерживаемые платформы:\n"
-            "• YouTube (видео + шортсы + MP3)\n"
+            "• YouTube (видео + шортсы)\n"
             "• VK (клипы + видео)\n"
             "• Instagram (рилсы + карусели)\n"
             "• TikTok (видео + карусели)\n"
@@ -2018,12 +1918,10 @@ async def main():
         if chat_id not in user_locks:
             user_locks[chat_id] = asyncio.Lock()
 
-        is_mp3 = quality == 'mp3'
-        task = DownloadTask(url, quality=None if is_mp3 else quality, audio_only=is_mp3)
+        task = DownloadTask(url, quality=quality)
         user_queues[chat_id].append(task)
 
-        label = "🎵 MP3 аудио" if is_mp3 else quality
-        await callback.message.edit_text(f"✅ {label} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
+        await callback.message.edit_text(f"✅ {quality} добавлено в очередь ({len(user_queues[chat_id])} шт.)")
 
         pending_yt.pop(str(chat_id), None)
 
