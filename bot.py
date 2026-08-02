@@ -1996,8 +1996,12 @@ async def main():
             resize_keyboard=True
         )
         if os.path.exists(welcome_img):
-            photo = FSInputFile(welcome_img)
-            await message.answer_photo(photo=photo, caption=text, parse_mode=ParseMode.HTML, reply_markup=start_kb)
+            try:
+                photo = FSInputFile(welcome_img)
+                await message.answer_photo(photo=photo, caption=text, parse_mode=ParseMode.HTML, reply_markup=start_kb)
+            except Exception as e:
+                logger.warning(f"Failed to load welcome image: {e}")
+                await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=start_kb)
         else:
             await message.answer(text, parse_mode=ParseMode.HTML, reply_markup=start_kb)
 
