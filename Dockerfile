@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-ARG BUILD_DATE=2026-08-02
+ARG BUILD_DATE=2026-08-02-v3
 
 WORKDIR /app
 
@@ -21,5 +21,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && playwright install chromium
 
 COPY . .
+RUN python -m py_compile bot.py && echo "Syntax OK"
 
 CMD ["python", "bot.py"]
