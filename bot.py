@@ -53,8 +53,21 @@ def get_ffmpeg_location():
 
 def get_instagram_cookiefile():
     cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
-    if os.path.exists(cookiefile):
+    if os.path.exists(cookiefile) and os.path.getsize(cookiefile) > 50:
         return cookiefile
+
+    b64_file = os.path.join(BOT_DIR, 'cookies_b64.txt')
+    if os.path.exists(b64_file):
+        try:
+            with open(b64_file) as f:
+                encoded = f.read().strip()
+            if encoded:
+                data = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+                with open(cookiefile, 'w', encoding='utf-8') as f:
+                    f.write(data.decode('utf-8'))
+                return cookiefile
+        except Exception as e:
+            logger.error(f'IG cookies b64 restore error: {e}')
 
     encoded = os.environ.get('INSTAGRAM_COOKIES_B64', '').strip()
     if not encoded:
@@ -1148,20 +1161,25 @@ def _extract_threads_post_data(html, shortcode, username=None):
     if not carousel_urls and username:
         carousel_urls = _get_carousel_from_feed(username, shortcode) or []
 
-    cap_match = re.search(r'"caption"\s*:\s*\{"text"\s*:\s*"([^"]*)"', html[max(0, code_pos - 20000):code_pos + 20000])
+    next_code_pos = html.find('"code":"', code_pos + len(f'"code":"{shortcode}"'))
+    if next_code_pos < 0:
+        next_code_pos = code_pos + 100000
 
     caption = ''
-    if cap_match:
-        raw = cap_match.group(1)
-        # Decode \uXXXX escapes safely, handling surrogates
-        def _decode_unicode(m):
-            code = int(m.group(1), 16)
-            try:
-                return chr(code)
-            except (ValueError, OverflowError):
-                return m.group(0)
-        caption = re.sub(r'\\u([0-9a-fA-F]{4})', _decode_unicode, raw)
-        caption = caption.replace('\\n', '\n').replace('\\/', '/').replace('\\"', '"')
+    def _decode_unicode(m):
+        code = int(m.group(1), 16)
+        try:
+            return chr(code)
+        except (ValueError, OverflowError):
+            return m.group(0)
+
+    for search_start, search_end in [(back_start, code_pos), (code_pos, next_code_pos)]:
+        cap_match = re.search(r'"caption"\s*:\s*\{"text"\s*:\s*"([^"]*)"', html[search_start:search_end])
+        if cap_match:
+            raw = cap_match.group(1)
+            caption = re.sub(r'\\u([0-9a-fA-F]{4})', _decode_unicode, raw)
+            caption = caption.replace('\\n', '\n').replace('\\/', '/').replace('\\"', '"')
+            break
 
     return {
         'video_url': vid_url,
@@ -2294,6 +2312,11 @@ async def main():
             cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
             with open(cookiefile, 'w', encoding='utf-8') as f:
                 f.write(content)
+
+            b64_file = os.path.join(BOT_DIR, 'cookies_b64.txt')
+            b64_data = base64.urlsafe_b64encode(content.encode('utf-8')).decode('ascii')
+            with open(b64_file, 'w', encoding='utf-8') as f:
+                f.write(b64_data)
 
             session_match = re.search(r'sessionid\t([^\t\n]+)', content)
             ds_match = re.search(r'ds_user_id\t([^\t\n]+)', content)
