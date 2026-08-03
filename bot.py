@@ -34,7 +34,6 @@ user_locks = {}
 pending_yt = {}
 pending_vk = {}
 queue_workers = {}
-pending_cookies_upload = {}
 
 
 def get_ffmpeg_path():
@@ -2242,14 +2241,12 @@ async def main():
             await message.answer("❌ Нет доступа")
             return
 
-        pending_cookies_upload[str(message.chat.id)] = True
-
         text = (
             "📋 <b>Обновление IG cookies</b>\n\n"
             "<b>Safari (Mac):</b>\n"
             "1. Залогинься в Instagram в Safari\n"
             "2. Выполни в Терминале:\n\n"
-            "<code>pip3 install browser-cookie3 2>/dev/null; python3 << 'EOF'\n"
+            "<code>pip3 install browser-cookie3 2>/dev/null; python3 &lt;&lt; 'EOF'\n"
             "import browser_cookie3\n"
             "cj = browser_cookie3.safari(domain_name='.instagram.com')\n"
             "with open('/tmp/cookies.txt', 'w') as f:\n"
@@ -2257,9 +2254,10 @@ async def main():
             "    for c in cj:\n"
             "        d = c.domain if c.domain.startswith('.') else '.' + c.domain\n"
             "        f.write(d + '\\t' + ('TRUE' if d.startswith('.') else 'FALSE') + '\\t' + c.path + '\\t' + ('TRUE' if c.secure else 'FALSE') + '\\t' + (str(int(c.expires)) if c.expires else '0') + '\\t' + c.name + '\\t' + c.value + '\\n')\n"
-            "print('Готово! Файл: /tmp/cookies.txt')\n"
+            "print('Done!')\n"
             "EOF</code>\n\n"
-            "3. Загрузи файл /tmp/cookies.txt сюда\n\n"
+            "3. Открой файл: <code>open /tmp</code>\n"
+            "4. Загрузи cookies.txt сюда\n\n"
             "<b>Chrome:</b> установи <a href=\"https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc\">Get cookies.txt LOCALLY</a> → Export на instagram.com\n\n"
             "⚠️ Файл cookies.txt в формате Netscape"
         )
@@ -2270,13 +2268,8 @@ async def main():
         if message.from_user.id != ADMIN_ID:
             return
 
-        chat_key = str(message.chat.id)
-        if chat_key not in pending_cookies_upload:
-            return
-
         doc = message.document
         if not doc.file_name or not doc.file_name.endswith('.txt'):
-            await message.answer("❌ Нужен файл .txt (cookies.txt)")
             return
 
         try:
@@ -2287,7 +2280,7 @@ async def main():
             content = downloaded.decode('utf-8', errors='replace')
 
             if 'sessionid' not in content:
-                await message.answer("⚠️ Файл загружен, но sessionid не найден. Убедись что Instagram залогинен в браузере.")
+                await message.answer("⚠️ sessionid не найден в файле. Убедись что Instagram залогинен.")
                 return
 
             cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
@@ -2305,8 +2298,6 @@ async def main():
                 f"Всего кук: {line_count}"
             )
             await message.answer(msg, parse_mode=ParseMode.HTML)
-
-            pending_cookies_upload.pop(chat_key, None)
 
         except Exception as e:
             logger.error(f"Cookie upload error: {e}")
