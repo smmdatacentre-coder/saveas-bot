@@ -900,12 +900,61 @@ def _get_carousel_from_feed(username, shortcode):
         if resp.status_code != 200:
             return []
 
-        post = _find_post_object_in_feed(resp.text, shortcode)
-        if not post:
+        html_feed = resp.text
+        sc_pattern = f'"code":"{shortcode}"'
+        sc_pos = html_feed.find(sc_pattern)
+        if sc_pos < 0:
             return []
 
-        carousel = post.get('carousel_media')
-        if not carousel or not isinstance(carousel, list):
+        carousel_pattern = '"carousel_media":'
+        search_start = max(0, sc_pos - 200000)
+        cml_pos = html_feed.rfind(carousel_pattern, search_start, sc_pos)
+        if cml_pos < 0:
+            return []
+
+        array_start = cml_pos + len(carousel_pattern)
+        while array_start < len(html_feed) and html_feed[array_start] in (' ', '\n', '\r', '\t'):
+            array_start += 1
+        if array_start >= len(html_feed) or html_feed[array_start] != '[':
+            return []
+
+        bracket_count = 0
+        in_string = False
+        escape_next = False
+        array_end = -1
+        for i in range(array_start, min(len(html_feed), array_start + 200000)):
+            ch = html_feed[i]
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\':
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == '[':
+                bracket_count += 1
+            elif ch == ']':
+                bracket_count -= 1
+                if bracket_count == 0:
+                    array_end = i + 1
+                    break
+
+        if array_end <= array_start:
+            return []
+
+        carousel_json = html_feed[array_start:array_end]
+        carousel_json = carousel_json.replace('\\\\u0026', '&')
+        carousel_json = carousel_json.replace('\\\\u002F', '/')
+        carousel_json = carousel_json.replace('\\\\/', '/')
+        carousel_json = carousel_json.replace('\\\\u003C', '<')
+        carousel_json = carousel_json.replace('\\\\u003E', '>')
+        carousel = json.loads(carousel_json)
+
+        if not isinstance(carousel, list):
             return []
 
         carousel_urls = []
@@ -929,81 +978,6 @@ def _get_carousel_from_feed(username, shortcode):
     except Exception as e:
         logger.warning(f"Threads feed carousel fallback error: {e}")
         return []
-
-
-def _find_post_object_in_feed(html_feed, shortcode):
-    """Find the complete post object for a given shortcode in the feed HTML."""
-    sc_pattern = f'"code":"{shortcode}"'
-    sc_positions = [m.start() for m in re.finditer(sc_pattern, html_feed)]
-    
-    for sc_pos in sc_positions:
-        brace_count = 0
-        post_start = -1
-        in_string = False
-        escape_next = False
-        
-        for i in range(sc_pos, max(0, sc_pos - 5000), -1):
-            ch = html_feed[i]
-            if escape_next:
-                escape_next = False
-                continue
-            if ch == '\\':
-                escape_next = True
-                continue
-            if ch == '"' and not escape_next:
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == '}':
-                brace_count += 1
-            elif ch == '{':
-                if brace_count == 0:
-                    post_start = i
-                    break
-                brace_count -= 1
-        
-        if post_start >= 0:
-            brace_count = 0
-            in_string = False
-            escape_next = False
-            post_end = -1
-            
-            for i in range(post_start, min(len(html_feed), post_start + 50000)):
-                ch = html_feed[i]
-                if escape_next:
-                    escape_next = False
-                    continue
-                if ch == '\\':
-                    escape_next = True
-                    continue
-                if ch == '"' and not escape_next:
-                    in_string = not in_string
-                    continue
-                if in_string:
-                    continue
-                if ch == '{':
-                    brace_count += 1
-                elif ch == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        post_end = i + 1
-                        break
-            
-            if post_end > post_start:
-                post_json = html_feed[post_start:post_end]
-                post_json = post_json.replace('\\\\u0026', '&')
-                post_json = post_json.replace('\\\\u002F', '/')
-                post_json = post_json.replace('\\\\/', '/')
-                post_json = post_json.replace('\\\\u003C', '<')
-                post_json = post_json.replace('\\\\u003E', '>')
-                
-                try:
-                    post = json.loads(post_json)
-                    return post
-                except json.JSONDecodeError:
-                    pass
-    return None
 
 
 def _extract_threads_post_data(html, shortcode, username=None):
