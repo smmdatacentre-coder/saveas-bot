@@ -142,6 +142,7 @@ class DownloadTask:
         self.progress = ''
         self.filename = None
         self.result = None
+        self.start_time = None
 
 
 class ProgressTracker:
@@ -1695,7 +1696,12 @@ def build_queue_text(queue):
     for i, task in enumerate(queue, 1):
         if task.status == 'downloading':
             icon = '⬇️'
-            status = task.progress if task.progress else 'загружается...'
+            elapsed = ''
+            if task.start_time:
+                elapsed_sec = int(time.time() - task.start_time)
+                m, s = divmod(elapsed_sec, 60)
+                elapsed = f' ({m}:{s:02d})' if m else f' ({s}с)'
+            status = task.progress if task.progress else f'загружается...{elapsed}'
         elif task.status == 'done':
             icon = '✅'
             status = 'готово'
@@ -1756,6 +1762,7 @@ async def process_queue(chat_id, bot, loop):
             try:
                 if url_type == 'tt_carousel' or detect_platform(task.url) == 'tiktok':
                     task.status = 'downloading'
+                    task.start_time = time.time()
                     await update_status(build_queue_text(queue))
 
                     tt_result = await asyncio.get_event_loop().run_in_executor(
@@ -1829,6 +1836,7 @@ async def process_queue(chat_id, bot, loop):
 
                 if detect_platform(task.url) == 'x':
                     task.status = 'downloading'
+                    task.start_time = time.time()
                     await update_status(build_queue_text(queue))
                     x_result = await asyncio.get_event_loop().run_in_executor(
                         None, lambda: download_x_media(task.url)
@@ -1879,6 +1887,7 @@ async def process_queue(chat_id, bot, loop):
 
                 if detect_platform(task.url) == 'threads':
                     task.status = 'downloading'
+                    task.start_time = time.time()
                     await update_status(build_queue_text(queue))
                     threads_result = await asyncio.get_event_loop().run_in_executor(
                         None, lambda: download_threads_post(task.url)
@@ -1930,6 +1939,7 @@ async def process_queue(chat_id, bot, loop):
 
                 if url_type == 'ig_post':
                     task.status = 'downloading'
+                    task.start_time = time.time()
                     await update_status(build_queue_text(queue))
 
                     photos, caption, ig_tmp_dir = await asyncio.get_event_loop().run_in_executor(
@@ -1968,6 +1978,7 @@ async def process_queue(chat_id, bot, loop):
                     continue
 
                 task.status = 'downloading'
+                task.start_time = time.time()
                 await update_status(build_queue_text(queue))
 
                 msg_ref = [status_msg]
