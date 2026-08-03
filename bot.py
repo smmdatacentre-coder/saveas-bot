@@ -1148,11 +1148,20 @@ def _extract_threads_post_data(html, shortcode, username=None):
     if not carousel_urls and username:
         carousel_urls = _get_carousel_from_feed(username, shortcode) or []
 
-    cap_match = re.search(r'"caption"\s*:\s*\{"text"\s*:\s*"([^"]*)"', html[max(0, code_pos - 5000):code_pos])
+    cap_match = re.search(r'"caption"\s*:\s*\{"text"\s*:\s*"([^"]*)"', html[max(0, code_pos - 20000):code_pos + 20000])
 
     caption = ''
     if cap_match:
-        caption = cap_match.group(1).replace('\\n', '\n').replace('\\u2019', "'")
+        raw = cap_match.group(1)
+        # Decode \uXXXX escapes safely, handling surrogates
+        def _decode_unicode(m):
+            code = int(m.group(1), 16)
+            try:
+                return chr(code)
+            except (ValueError, OverflowError):
+                return m.group(0)
+        caption = re.sub(r'\\u([0-9a-fA-F]{4})', _decode_unicode, raw)
+        caption = caption.replace('\\n', '\n').replace('\\/', '/').replace('\\"', '"')
 
     return {
         'video_url': vid_url,
