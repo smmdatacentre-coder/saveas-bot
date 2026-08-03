@@ -2276,8 +2276,7 @@ async def main():
             file = await bot.get_file(doc.file_id)
             file_path = file.file_path
             downloaded = await bot.download_file(file_path)
-
-            content = downloaded.decode('utf-8', errors='replace')
+            content = downloaded.read().decode('utf-8', errors='replace') if hasattr(downloaded, 'read') else downloaded.decode('utf-8', errors='replace')
 
             if 'sessionid' not in content:
                 await message.answer("⚠️ sessionid не найден в файле. Убедись что Instagram залогинен.")
