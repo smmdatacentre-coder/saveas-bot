@@ -1034,86 +1034,113 @@ def _extract_threads_post_data(html, shortcode, username=None):
     if code_pos < 0:
         return None
 
-    img_pos = html.find('"image_versions2"', code_pos)
-    if img_pos < 0:
-        return None
+    # Find previous code to define backward search boundary
+    prev_code_pos = html.rfind('"code":"', max(0, code_pos - 200000), code_pos)
+    back_start = prev_code_pos + 10 if prev_code_pos >= 0 else max(0, code_pos - 200000)
 
-    img_bracket_start = html.find('[', img_pos)
-    img_bracket_end = html.find(']', img_bracket_start)
-    img_json = html[img_bracket_start:img_bracket_end + 1].replace('\\/', '/')
-    try:
-        imgs = json.loads(img_json)
-    except:
-        return None
-    if not imgs:
-        return None
+    # Search for carousel_media — try backward first (carousel often before code), then forward
+    carousel_pos = -1
+    carousel_data = None
 
-    best_img = max(imgs, key=lambda x: x.get('width', 0) * x.get('height', 0))
-    img_url = best_img.get('url', '')
+    car_matches_back = list(re.finditer(r'"carousel_media":\s*\[', html[back_start:code_pos]))
+    if car_matches_back:
+        carousel_pos = back_start + car_matches_back[-1].start()
+
+    if carousel_pos < 0:
+        fwd_car = html.find('"carousel_media":[', code_pos, code_pos + 200000)
+        if fwd_car >= 0:
+            snippet = html[fwd_car:fwd_car + 50]
+            if not snippet.startswith('"carousel_media":null'):
+                carousel_pos = fwd_car
+
+    if carousel_pos >= 0:
+        cb_start = html.find('[', carousel_pos)
+        if cb_start >= 0:
+            depth = 0
+            in_str = False
+            esc = False
+            cb_end = -1
+            for ci in range(cb_start, min(len(html), cb_start + 300000)):
+                ch = html[ci]
+                if esc:
+                    esc = False
+                    continue
+                if ch == '\\':
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == '[':
+                    depth += 1
+                elif ch == ']':
+                    depth -= 1
+                    if depth == 0:
+                        cb_end = ci
+                        break
+            if cb_end >= 0:
+                carousel_json = html[cb_start:cb_end + 1].replace('\\/', '/')
+                try:
+                    carousel_data = json.loads(carousel_json)
+                except:
+                    carousel_data = None
+
+    # Extract image and video from the post object
+    # Try backward first, then forward
+    img_pos = -1
+    for search_start, search_end in [(back_start, code_pos), (code_pos, code_pos + 200000)]:
+        p = html.find('"image_versions2"', search_start, search_end)
+        if p >= 0:
+            img_pos = p
+            break
+
+    img_url = ''
+    if img_pos >= 0:
+        img_bracket_start = html.find('[', img_pos)
+        img_bracket_end = html.find(']', img_bracket_start)
+        if img_bracket_start >= 0 and img_bracket_end >= 0:
+            img_json = html[img_bracket_start:img_bracket_end + 1].replace('\\/', '/')
+            try:
+                imgs = json.loads(img_json)
+                if imgs:
+                    best_img = max(imgs, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                    img_url = best_img.get('url', '')
+            except:
+                pass
 
     vid_url = None
-    carousel_pos = html.find('"carousel_media"', code_pos)
-    search_end = carousel_pos if carousel_pos > img_pos else img_pos + 80000
-    vid_pos = html.find('"video_versions"', img_pos, search_end)
-
-    if vid_pos >= 0:
-        vb_start = html.find('[', vid_pos)
-        vb_end = html.find(']', vb_start)
-        vid_json = html[vb_start:vb_end + 1].replace('\\/', '/')
-        try:
-            vids = json.loads(vid_json)
-            if vids:
-                best_v = max(vids, key=lambda x: x.get('type', 0))
-                vid_url = best_v.get('url', '')
-        except:
-            pass
+    vid_search_end = carousel_pos if carousel_pos > img_pos else img_pos + 80000
+    for vs, ve in [(back_start, code_pos), (img_pos if img_pos >= 0 else code_pos, vid_search_end)]:
+        vid_pos = html.find('"video_versions"', vs, ve)
+        if vid_pos >= 0:
+            vb_start = html.find('[', vid_pos)
+            vb_end = html.find(']', vb_start)
+            if vb_start >= 0 and vb_end >= 0:
+                vid_json = html[vb_start:vb_end + 1].replace('\\/', '/')
+                try:
+                    vids = json.loads(vid_json)
+                    if vids:
+                        best_v = max(vids, key=lambda x: x.get('type', 0))
+                        vid_url = best_v.get('url', '')
+                except:
+                    pass
+            break
 
     carousel_urls = []
-    if carousel_pos >= 0 and carousel_pos < search_end + 80000:
-        snippet = html[carousel_pos:carousel_pos + 50]
-        if not snippet.startswith('"carousel_media":null'):
-            cb_start = html.find('[', carousel_pos)
-            if cb_start >= 0:
-                # Find matching ] for the array, handling nested brackets
-                depth = 0
-                in_str = False
-                esc = False
-                cb_end = -1
-                for ci in range(cb_start, len(html)):
-                    ch = html[ci]
-                    if esc:
-                        esc = False
-                        continue
-                    if ch == '\\':
-                        esc = True
-                        continue
-                    if ch == '"':
-                        in_str = not in_str
-                        continue
-                    if in_str:
-                        continue
-                    if ch == '[':
-                        depth += 1
-                    elif ch == ']':
-                        depth -= 1
-                        if depth == 0:
-                            cb_end = ci
-                            break
-                if cb_end >= 0:
-                    carousel_json = html[cb_start:cb_end + 1].replace('\\/', '/')
-                    try:
-                        items = json.loads(carousel_json)
-                        for item in items:
-                            if 'video_versions' in item and item['video_versions']:
-                                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
-                                carousel_urls.append(('video', best.get('url', '')))
-                            elif 'image_versions2' in item:
-                                cands = item['image_versions2'].get('candidates', [])
-                                if cands:
-                                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
-                                    carousel_urls.append(('image', best.get('url', '')))
-                    except:
-                        pass
+    if carousel_data:
+        for item in carousel_data:
+            if not isinstance(item, dict):
+                continue
+            if item.get('video_versions'):
+                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                carousel_urls.append(('video', best.get('url', '')))
+            elif item.get('image_versions2'):
+                cands = item['image_versions2'].get('candidates', [])
+                if cands:
+                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                    carousel_urls.append(('image', best.get('url', '')))
 
     # If no carousel on post page, try to fetch from user's feed
     if not carousel_urls and username:
