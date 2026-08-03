@@ -2037,7 +2037,11 @@ async def process_queue(chat_id, bot, loop):
                         caption_text = caption.strip() if caption else ''
                         for i, fpath in enumerate(photos):
                             try:
-                                cap = caption_text[:1024] if (i == 0 and caption_text) else None
+                                cap_parts = []
+                                if i == 0 and caption_text:
+                                    cap_parts.append(caption_text[:800])
+                                cap_parts.append('📎 скачано с @saverdshot_bot')
+                                cap = '\n\n'.join(cap_parts)[:1024]
                                 is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
                                 if is_video:
                                     w, h = extract_video_dimensions(fpath)
