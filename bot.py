@@ -27,11 +27,14 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 BOT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.environ['PATH'] = BOT_DIR + ':' + os.environ.get('PATH', '')
 
+ADMIN_ID = 256869382
+
 user_queues = {}
 user_locks = {}
 pending_yt = {}
 pending_vk = {}
 queue_workers = {}
+pending_cookies_upload = {}
 
 
 def get_ffmpeg_path():
@@ -2232,6 +2235,72 @@ async def main():
     @dp.message(F.text == '🟢 Старт')
     async def handle_start_btn(message: Message):
         await cmd_start(message)
+
+    @dp.message(F.text == '/updatecookies')
+    async def cmd_updatecookies(message: Message):
+        if message.from_user.id != ADMIN_ID:
+            await message.answer("❌ Нет доступа")
+            return
+
+        pending_cookies_upload[str(message.chat.id)] = True
+
+        text = (
+            "📋 <b>Обновление IG cookies</b>\n\n"
+            "1. Открой Instagram в Safari, залогинься\n"
+            "2. Установи расширение \"Get cookies.txt LOCALLY\":\n"
+            "   <a href=\"https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc\">Chrome</a>\n"
+            "3. На instagram.com → Export → скачается cookies.txt\n"
+            "4. Загрузи файл сюда\n\n"
+            "⚠️ Файл должен быть в формате Netscape (cookies.txt)"
+        )
+        await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+    @dp.message(F.document)
+    async def handle_document(message: Message):
+        if message.from_user.id != ADMIN_ID:
+            return
+
+        chat_key = str(message.chat.id)
+        if chat_key not in pending_cookies_upload:
+            return
+
+        doc = message.document
+        if not doc.file_name or not doc.file_name.endswith('.txt'):
+            await message.answer("❌ Нужен файл .txt (cookies.txt)")
+            return
+
+        try:
+            file = await bot.get_file(doc.file_id)
+            file_path = file.file_path
+            downloaded = await bot.download_file(file_path)
+
+            content = downloaded.decode('utf-8', errors='replace')
+
+            if 'sessionid' not in content:
+                await message.answer("⚠️ Файл загружен, но sessionid не найден. Убедись что Instagram залогинен в браузере.")
+                return
+
+            cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
+            with open(cookiefile, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            session_match = re.search(r'sessionid\t([^\t\n]+)', content)
+            ds_match = re.search(r'ds_user_id\t([^\t\n]+)', content)
+            line_count = len([l for l in content.splitlines() if l and not l.startswith('#')])
+
+            msg = (
+                f"✅ <b>IG cookies обновлены!</b>\n\n"
+                f"sessionid: {'есть' if session_match else 'нет'}\n"
+                f"ds_user_id: {ds_match.group(1) if ds_match else '?'}\n"
+                f"Всего кук: {line_count}"
+            )
+            await message.answer(msg, parse_mode=ParseMode.HTML)
+
+            pending_cookies_upload.pop(chat_key, None)
+
+        except Exception as e:
+            logger.error(f"Cookie upload error: {e}")
+            await message.answer(f"❌ Ошибка: {str(e)[:200]}")
 
     @dp.message(F.text)
     async def handle_link(message: Message):
