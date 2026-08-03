@@ -943,16 +943,27 @@ def _get_carousel_from_feed(username, shortcode):
         if sc_pos < 0:
             return []
 
-        carousel_pattern = '"carousel_media":'
-        search_start = max(0, sc_pos - 200000)
-        cml_pos = html_feed.rfind(carousel_pattern, search_start, sc_pos)
+        cml_pos = -1
+
+        prev_code_end = html_feed.rfind('"code":"', max(0, sc_pos - 200000), sc_pos)
+        search_from = prev_code_end + 10 if prev_code_end >= 0 else max(0, sc_pos - 200000)
+        car_matches_back = list(re.finditer(r'"carousel_media":\s*\[', html_feed[search_from:sc_pos]))
+        if car_matches_back:
+            cml_pos = search_from + car_matches_back[-1].start()
+
+        if cml_pos < 0:
+            next_code_pos = html_feed.find('"code":"', sc_pos + len(sc_pattern))
+            if next_code_pos < 0:
+                next_code_pos = sc_pos + 200000
+            car_matches = list(re.finditer(r'"carousel_media":\s*\[', html_feed[sc_pos:next_code_pos]))
+            if car_matches:
+                cml_pos = sc_pos + car_matches[0].start()
+
         if cml_pos < 0:
             return []
 
-        array_start = cml_pos + len(carousel_pattern)
-        while array_start < len(html_feed) and html_feed[array_start] in (' ', '\n', '\r', '\t'):
-            array_start += 1
-        if array_start >= len(html_feed) or html_feed[array_start] != '[':
+        array_start = html_feed.find('[', cml_pos)
+        if array_start < 0 or array_start > cml_pos + 30:
             return []
 
         bracket_count = 0
@@ -1182,6 +1193,13 @@ def download_threads_post(url):
                         for chunk in dr.iter_content(chunk_size=65536):
                             f.write(chunk)
                     if os.path.getsize(filepath) > 0:
+                        if ext == 'jpg':
+                            with open(filepath, 'rb') as f:
+                                header = f.read(12)
+                            if b'ftyp' in header:
+                                new_path = filepath.replace('.jpg', '.mp4')
+                                os.rename(filepath, new_path)
+                                filepath = new_path
                         files.append(filepath)
             except Exception as e:
                 logger.error(f"Threads media download [{i}]: {e}")
@@ -1981,8 +1999,8 @@ async def process_queue(chat_id, bot, loop):
                                 await asyncio.sleep(1)
                     else:
                         if not get_instagram_cookiefile():
-                            raise RuntimeError('Instagram требует cookies авторизованного аккаунта')
-                        raise RuntimeError('Instagram не отдал медиа даже с cookies')
+                            raise RuntimeError('Instagram требует cookies. Обновите cookies.txt')
+                        raise RuntimeError('Instagram: cookies устарели или пост приватный. Обновите cookies.txt')
 
                     queue.pop(0)
                     await update_status(build_queue_text(queue))
@@ -2161,7 +2179,7 @@ async def main():
             "🎬 Поддерживаемые платформы:\n"
             "• YouTube (видео + шортсы)\n"
             "• VK (клипы + видео)\n"
-            "• Instagram (рилсы + карусели)\n"
+            "• Ig (рилсы + карусели)\n"
             "• TikTok (видео + карусели)\n"
             "• X/Twitter (видео + фото + текст)\n"
             "• Rutube\n"
