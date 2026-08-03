@@ -2246,12 +2246,22 @@ async def main():
 
         text = (
             "📋 <b>Обновление IG cookies</b>\n\n"
-            "1. Открой Instagram в Safari, залогинься\n"
-            "2. Установи расширение \"Get cookies.txt LOCALLY\":\n"
-            "   <a href=\"https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc\">Chrome</a>\n"
-            "3. На instagram.com → Export → скачается cookies.txt\n"
-            "4. Загрузи файл сюда\n\n"
-            "⚠️ Файл должен быть в формате Netscape (cookies.txt)"
+            "<b>Safari (Mac):</b>\n"
+            "1. Залогинься в Instagram в Safari\n"
+            "2. Выполни в Терминале:\n\n"
+            "<code>pip3 install browser-cookie3 2>/dev/null; python3 << 'EOF'\n"
+            "import browser_cookie3\n"
+            "cj = browser_cookie3.safari(domain_name='.instagram.com')\n"
+            "with open('/tmp/cookies.txt', 'w') as f:\n"
+            "    f.write('# Netscape HTTP Cookie File\\n')\n"
+            "    for c in cj:\n"
+            "        d = c.domain if c.domain.startswith('.') else '.' + c.domain\n"
+            "        f.write(d + '\\t' + ('TRUE' if d.startswith('.') else 'FALSE') + '\\t' + c.path + '\\t' + ('TRUE' if c.secure else 'FALSE') + '\\t' + (str(int(c.expires)) if c.expires else '0') + '\\t' + c.name + '\\t' + c.value + '\\n')\n"
+            "print('Готово! Файл: /tmp/cookies.txt')\n"
+            "EOF</code>\n\n"
+            "3. Загрузи файл /tmp/cookies.txt сюда\n\n"
+            "<b>Chrome:</b> установи <a href=\"https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc\">Get cookies.txt LOCALLY</a> → Export на instagram.com\n\n"
+            "⚠️ Файл cookies.txt в формате Netscape"
         )
         await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
