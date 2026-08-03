@@ -87,6 +87,8 @@ def detect_url_type(url):
         return 'broken'
     if re.search(r'instagram\.com/p/', u) or re.search(r'instagram\.com/reels?/', u):
         return 'ig_post'
+    if re.search(r'instagram\.com/stories/', u):
+        return 'ig_post'
     if 'youtube.com' in u or 'youtu.be' in u:
         if '/shorts/' in u:
             return 'yt_short'
@@ -394,6 +396,41 @@ def download_ig_post(url):
                 return photos, caption, tmp_dir
         except Exception as e:
             logger.error(f"Instagram gallery-dl carousel error: {e}")
+
+    story_match = re.search(r'instagram\.com/stories/[^/]+/(\d+)', url)
+    if story_match:
+        pk = story_match.group(1)
+        try:
+            item = _ig_api_get(pk)
+            if item:
+                media_type = item.get('media_type', 1)
+                if media_type == 2:
+                    vids = item.get('video_versions', [])
+                    if vids:
+                        vids.sort(key=lambda v: v.get('width', 0) * v.get('height', 0), reverse=True)
+                        dl_url = vids[0]['url']
+                        dr = requests.get(dl_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=60)
+                        if dr.status_code == 200:
+                            fp = os.path.join(tmp_dir, 'story.mp4')
+                            with open(fp, 'wb') as f:
+                                f.write(dr.content)
+                            if os.path.getsize(fp) > 0:
+                                return [fp], '', tmp_dir
+                elif item.get('image_versions2'):
+                    cands = item['image_versions2'].get('candidates', [])
+                    if cands:
+                        best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                        dl_url = best.get('url')
+                        if dl_url:
+                            dr = requests.get(dl_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=60)
+                            if dr.status_code == 200:
+                                fp = os.path.join(tmp_dir, 'story.jpg')
+                                with open(fp, 'wb') as f:
+                                    f.write(dr.content)
+                                if os.path.getsize(fp) > 0:
+                                    return [fp], '', tmp_dir
+        except Exception as e:
+            logger.error(f"Instagram story API error: {e}")
 
     shortcode = _extract_ig_shortcode(url)
     if not shortcode:
