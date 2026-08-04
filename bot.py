@@ -2055,6 +2055,7 @@ async def process_queue(chat_id, bot, loop):
                     if threads_result.get('type') in ('video', 'photo', 'media_group'):
                         files = threads_result.get('files', [])
                         caption = threads_result.get('caption', '')
+                        sent_ok = False
                         if threads_result.get('type') == 'media_group' and len(files) > 1:
                             try:
                                 from aiogram.types import InputMediaPhoto, InputMediaVideo
@@ -2067,9 +2068,10 @@ async def process_queue(chat_id, bot, loop):
                                     else:
                                         media_group.append(InputMediaPhoto(media=fobj, caption=caption[:1024] if i == 0 else None))
                                 await bot.send_media_group(chat_id=chat_id, media=media_group)
+                                sent_ok = True
                             except Exception as e:
                                 logger.error(f"Threads media_group send error: {e}")
-                        else:
+                        if not sent_ok:
                             for i, fpath in enumerate(files):
                                 try:
                                     is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
