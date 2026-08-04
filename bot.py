@@ -120,6 +120,8 @@ def detect_url_type(url):
         return 'video'
     if 'pinterest.' in u or 'pin.it' in u:
         return 'pinterest'
+    if 'threads.net' in u or 'threads.com' in u:
+        return 'threads'
     return 'video'
 
 
