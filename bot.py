@@ -118,6 +118,8 @@ def detect_url_type(url):
         return 'video'
     if 'rutube.ru' in u:
         return 'video'
+    if 'pinterest.' in u or 'pin.it' in u:
+        return 'pinterest'
     return 'video'
 
 
@@ -139,6 +141,8 @@ def detect_platform(url):
         return 'x'
     if 'threads.net' in u or 'threads.com' in u:
         return 'threads'
+    if 'pinterest.' in u or 'pin.it' in u:
+        return 'pinterest'
     return 'unknown'
 
 
@@ -1276,6 +1280,75 @@ def download_threads_post(url):
         return {'type': 'error', 'error': str(e)[:200]}
 
 
+def download_pinterest(url):
+    """Download photo or video from Pinterest."""
+    tmp_dir = os.path.join(DOWNLOAD_DIR, f"pin_{uuid.uuid4().hex[:8]}")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    try:
+        resp = requests.get(url, headers={
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+            'Accept': 'text/html',
+        }, timeout=20, allow_redirects=True)
+        if resp.status_code != 200:
+            return {'type': 'error', 'error': f'HTTP {resp.status_code}'}
+        html = resp.text
+
+        # Try to extract video URL
+        video_urls = re.findall(
+            r'https?://v\d*\.pinimg\.com/videos/[^"\'>\s\\]+\.mp4(?:\?[^"\'>\s\\]*)?',
+            html
+        )
+        if video_urls:
+            video_url = video_urls[0]
+            dr = requests.get(video_url, headers={
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
+            }, timeout=60, stream=True)
+            if dr.status_code == 200:
+                fp = os.path.join(tmp_dir, 'pinterest_video.mp4')
+                with open(fp, 'wb') as f:
+                    for chunk in dr.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                if os.path.getsize(fp) > 0:
+                    return {'type': 'video', 'files': [fp], 'caption': ''}
+
+        # Try to extract image URL (originals > 1200x > 720x)
+        img_urls = sorted(set(re.findall(
+            r'https://i\.pinimg\.com/originals/[^"\'>\s]+', html
+        )))
+        if not img_urls:
+            img_urls = sorted(set(re.findall(
+                r'https://i\.pinimg\.com/1200x/[^"\'>\s]+', html
+            )))
+        if not img_urls:
+            img_urls = sorted(set(re.findall(
+                r'https://i\.pinimg\.com/720x/[^"\'>\s]+', html
+            )))
+
+        # Filter out CSS/icon URLs
+        img_urls = [u for u in img_urls if not u.endswith(('.svg', '.ico')) and '/140x140_RS/' not in u and '/136x136/' not in u]
+
+        if img_urls:
+            img_url = img_urls[0]
+            dr = requests.get(img_url, headers={
+                'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)',
+            }, timeout=60, stream=True)
+            if dr.status_code == 200:
+                ext = 'png' if img_url.endswith('.png') else 'jpg'
+                fp = os.path.join(tmp_dir, f'pinterest_image.{ext}')
+                with open(fp, 'wb') as f:
+                    for chunk in dr.iter_content(chunk_size=65536):
+                        f.write(chunk)
+                if os.path.getsize(fp) > 0:
+                    return {'type': 'photo', 'files': [fp], 'caption': ''}
+
+        return {'type': 'error', 'error': 'Медиа не найдено'}
+
+    except Exception as e:
+        logger.error(f"Pinterest download error: {e}")
+        return {'type': 'error', 'error': str(e)[:200]}
+
+
 def download_youtube_cobalt(url, audio_only=False):
     return None
 
@@ -2017,6 +2090,42 @@ async def process_queue(chat_id, bot, loop):
                         task.result = {'photos': files}
                     else:
                         raise RuntimeError(threads_result.get('error', 'Не удалось скачать из Threads'))
+
+                    queue.pop(0)
+                    await update_status(build_queue_text(queue))
+                    continue
+
+                if url_type == 'pinterest':
+                    task.status = 'downloading'
+                    task.start_time = time.time()
+                    await update_status(build_queue_text(queue))
+
+                    pin_result = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: download_pinterest(task.url)
+                    )
+
+                    if pin_result.get('type') in ('video', 'photo'):
+                        files = pin_result.get('files', [])
+                        cap = '📎 скачано с @saverdshot_bot'
+                        for i, fpath in enumerate(files):
+                            try:
+                                is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
+                                fobj = FSInputFile(fpath)
+                                if is_video:
+                                    w, h = extract_video_dimensions(fpath)
+                                    send_kwargs = dict(chat_id=chat_id, video=fobj, caption=cap)
+                                    if w and h:
+                                        send_kwargs['width'] = w
+                                        send_kwargs['height'] = h
+                                    await bot.send_video(**send_kwargs)
+                                else:
+                                    await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                            except Exception as e:
+                                logger.error(f"Pinterest send error: {e}")
+                        task.status = 'done'
+                        task.result = {'photos': files}
+                    else:
+                        raise RuntimeError(pin_result.get('error', 'Не удалось скачать из Pinterest'))
 
                     queue.pop(0)
                     await update_status(build_queue_text(queue))
