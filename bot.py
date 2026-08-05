@@ -28,6 +28,7 @@ BOT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.environ['PATH'] = BOT_DIR + ':' + os.environ.get('PATH', '')
 
 ADMIN_ID = 256869382
+ERROR_SUFFIX = "\n\n📞 Сообщите об ошибке @d8shot_manager_bot и приложите скрин — пофиксим в ближайшее время!"
 
 user_queues = {}
 user_locks = {}
@@ -1568,7 +1569,7 @@ def download_video(task, msg_ref, loop, queue=None):
                 dl_dir = DOWNLOAD_DIR
 
                 ffmpeg_location = get_ffmpeg_location()
-                download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
+                download_clients = [None, ['android_vr'], ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
 
                 is_short = '/shorts/' in url
                 dl_dir = DOWNLOAD_DIR
@@ -1582,7 +1583,7 @@ def download_video(task, msg_ref, loop, queue=None):
                     dl_format = 'best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]/best'
 
                 ffmpeg_location = get_ffmpeg_location()
-                download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
+                download_clients = [None, ['android_vr'], ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
                 last_err = None
                 for cli_idx, client in enumerate(download_clients):
                     try:
@@ -1688,7 +1689,7 @@ def download_video(task, msg_ref, loop, queue=None):
             if 'Private' in msg or "isn't available" in msg:
                 return {'error': 'Видео приватное или недоступно'}
             if 'needs to be reloaded' in msg or '403' in msg or 'Forbidden' in msg:
-                return {'error': 'YouTube блокирует запросы с этого сервера (HTTP 403). Попробуйте через прокси/VPN или другой сервер.'}
+                return {'error': f'YouTube блокирует запросы с этого сервера (HTTP 403). Попробуйте через прокси/VPN или другой сервер.'}
             if 'timed out' in msg.lower():
                 return {'error': 'Таймаут соединения'}
             return {'error': f'Ошибка: {msg[:200]}'}
@@ -1946,7 +1947,7 @@ async def process_queue(chat_id, bot, loop):
                                     )
                                     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                                 else:
-                                    await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг.")
+                                    await bot.send_message(chat_id, f"❌ Не удалось загрузить на хостинг.{ERROR_SUFFIX}")
                             else:
                                 video_file = FSInputFile(fn)
                                 w, h = extract_video_dimensions(fn)
@@ -1959,7 +1960,7 @@ async def process_queue(chat_id, bot, loop):
                                     send_kwargs['height'] = h
                                 await bot.send_video(**send_kwargs)
                         except Exception as e:
-                            await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}")
+                            await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}{ERROR_SUFFIX}")
                         finally:
                             if os.path.exists(fn):
                                 os.remove(fn)
@@ -2198,7 +2199,7 @@ async def process_queue(chat_id, bot, loop):
 
                 if 'error' in result:
                     task.status = 'error'
-                    await bot.send_message(chat_id, f"❌ {result['error']}")
+                    await bot.send_message(chat_id, f"❌ {result['error']}{ERROR_SUFFIX}")
                 else:
                     task.status = 'done'
                     task.filename = result['filename']
@@ -2222,7 +2223,7 @@ async def process_queue(chat_id, bot, loop):
                                 )
                                 await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                             else:
-                                await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг. Попробуйте позже.")
+                                await bot.send_message(chat_id, f"❌ Не удалось загрузить на хостинг. Попробуйте позже.{ERROR_SUFFIX}")
                         elif is_short:
                             video_file = FSInputFile(result['filename'])
                             w, h = extract_video_dimensions(result['filename'])
@@ -2269,7 +2270,7 @@ async def process_queue(chat_id, bot, loop):
                                     )
                                     await bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
                                 else:
-                                    await bot.send_message(chat_id, "❌ Не удалось загрузить на хостинг. Попробуйте позже.")
+                                    await bot.send_message(chat_id, f"❌ Не удалось загрузить на хостинг. Попробуйте позже.{ERROR_SUFFIX}")
                             else:
                                 video_file = FSInputFile(result['filename'])
                                 thumb_file = FSInputFile(result['thumb']) if result.get('thumb') else None
@@ -2282,7 +2283,7 @@ async def process_queue(chat_id, bot, loop):
                     except Exception as e:
                         task.status = 'error'
                         task.result = {'error': f'Ошибка отправки: {str(e)[:200]}'}
-                        await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}")
+                        await bot.send_message(chat_id, f"❌ Ошибка: {str(e)[:100]}{ERROR_SUFFIX}")
                     finally:
                         if os.path.exists(result['filename']):
                             os.remove(result['filename'])
@@ -2298,7 +2299,7 @@ async def process_queue(chat_id, bot, loop):
                 task.status = 'error'
                 task.result = {'error': f'Внутренняя ошибка: {str(e)[:200]}'}
                 try:
-                    await bot.send_message(chat_id, f"❌ {task.result['error']}")
+                    await bot.send_message(chat_id, f"❌ {task.result['error']}{ERROR_SUFFIX}")
                 except Exception:
                     pass
                 queue.pop(0)
@@ -2786,7 +2787,7 @@ async def main():
             
             downloaded_file = None
             
-            download_clients = [None, ['web'], ['mweb'], ['android'], ['ios'], ['tv_embedded'], ['mediaconnect']]
+            download_clients = [None, ['android_vr'], ['web'], ['mweb'], ['android'], ['ios'], ['tv_embedded'], ['mediaconnect']]
             for client in download_clients:
                 if downloaded_file:
                     break
