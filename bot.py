@@ -257,6 +257,9 @@ def make_ydl_opts(fmt=None, quality=None):
     ffmpeg_location = get_ffmpeg_location()
     if ffmpeg_location:
         base['ffmpeg_location'] = ffmpeg_location
+    proxy = get_youtube_proxy()
+    if proxy:
+        base['proxy'] = proxy
     if fmt:
         base['format'] = fmt
     if quality:
@@ -1556,6 +1559,7 @@ def download_video(task, msg_ref, loop, queue=None):
         try:
             if platform == 'youtube':
                 vid_id = None
+                opts['extractor_args'] = {'youtube': {'player_client': ['android_vr']}}
 
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=False)
@@ -1569,7 +1573,6 @@ def download_video(task, msg_ref, loop, queue=None):
                 dl_dir = DOWNLOAD_DIR
 
                 ffmpeg_location = get_ffmpeg_location()
-                download_clients = [None, ['android_vr'], ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
 
                 is_short = '/shorts/' in url
                 dl_dir = DOWNLOAD_DIR
@@ -1584,6 +1587,7 @@ def download_video(task, msg_ref, loop, queue=None):
 
                 ffmpeg_location = get_ffmpeg_location()
                 download_clients = [None, ['android_vr'], ['web'], ['mweb'], ['android'], ['ios'], ['tv'], ['tv_embedded'], ['mediaconnect']]
+                proxy = get_youtube_proxy()
                 last_err = None
                 for cli_idx, client in enumerate(download_clients):
                     try:
@@ -1598,6 +1602,8 @@ def download_video(task, msg_ref, loop, queue=None):
                         }
                         if client:
                             dl_opts['extractor_args'] = {'youtube': {'player_client': client}}
+                        if proxy:
+                            dl_opts['proxy'] = proxy
                         if ffmpeg_location:
                             dl_opts['ffmpeg_location'] = ffmpeg_location
                         with yt_dlp.YoutubeDL(dl_opts) as ydl:
