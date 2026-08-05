@@ -1567,7 +1567,7 @@ def download_video(task, msg_ref, loop, queue=None):
                         return {'error': 'Не удалось получить информацию'}
                     title = info.get('title', '')
                     vid_id = info.get('id', '')
-                track.title = title[:80] if title else ''
+                tracker.title = title[:80] if title else ''
                 tracker.title = title[:40] if title else ''
 
                 dl_dir = DOWNLOAD_DIR
