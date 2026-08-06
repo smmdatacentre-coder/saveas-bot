@@ -418,6 +418,16 @@ def download_ig_post(url):
                     if os.path.isfile(fp) and os.path.getsize(fp) > 0:
                         photos.append(fp)
             if photos:
+                sc = _extract_ig_shortcode(url)
+                if sc:
+                    try:
+                        pk = _ig_get_media_pk(sc)
+                        if pk:
+                            item = _ig_api_get(pk)
+                            if item:
+                                caption = item.get('caption', {}).get('text', '') if item.get('caption') else ''
+                    except Exception:
+                        pass
                 return photos, caption, tmp_dir
         except Exception as e:
             logger.error(f"Instagram gallery-dl carousel error: {e}")
