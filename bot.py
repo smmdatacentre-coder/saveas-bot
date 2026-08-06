@@ -2155,28 +2155,47 @@ async def process_queue(chat_id, bot, loop):
                         task.status = 'done'
                         task.result = {'photos': photos}
                         caption_text = caption.strip() if caption else ''
-                        for i, fpath in enumerate(photos):
+                        cap_parts = []
+                        if caption_text:
+                            cap_parts.append(caption_text[:800])
+                        cap_parts.append('📎 скачано с @saverdshot_bot')
+                        cap = '\n\n'.join(cap_parts)[:1024]
+
+                        sent_ok = False
+                        if len(photos) > 1:
                             try:
-                                cap_parts = []
-                                if i == 0 and caption_text:
-                                    cap_parts.append(caption_text[:800])
-                                cap_parts.append('📎 скачано с @saverdshot_bot')
-                                cap = '\n\n'.join(cap_parts)[:1024]
-                                is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
-                                if is_video:
-                                    w, h = extract_video_dimensions(fpath)
-                                    send_kwargs = dict(chat_id=chat_id, video=FSInputFile(fpath), caption=cap)
-                                    if w and h:
-                                        send_kwargs['width'] = w
-                                        send_kwargs['height'] = h
-                                    await bot.send_video(**send_kwargs)
-                                else:
-                                    await bot.send_photo(chat_id=chat_id, photo=FSInputFile(fpath), caption=cap)
-                                if i < len(photos) - 1:
-                                    await asyncio.sleep(0.5)
+                                from aiogram.types import InputMediaPhoto, InputMediaVideo
+                                media_group = []
+                                for i, fpath in enumerate(photos[:10]):
+                                    is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
+                                    fobj = FSInputFile(fpath)
+                                    if is_video:
+                                        media_group.append(InputMediaVideo(media=fobj, caption=cap if i == 0 else None))
+                                    else:
+                                        media_group.append(InputMediaPhoto(media=fobj, caption=cap if i == 0 else None))
+                                await bot.send_media_group(chat_id=chat_id, media=media_group)
+                                sent_ok = True
                             except Exception as e:
-                                logger.error(f"IG send [{i}] error: {e}")
-                                await asyncio.sleep(1)
+                                logger.error(f"IG media_group send error: {e}")
+                        if not sent_ok:
+                            for i, fpath in enumerate(photos):
+                                try:
+                                    is_video = fpath.lower().endswith(('.mp4', '.mov', '.webm'))
+                                    fobj = FSInputFile(fpath)
+                                    if is_video:
+                                        w, h = extract_video_dimensions(fpath)
+                                        send_kwargs = dict(chat_id=chat_id, video=fobj, caption=cap)
+                                        if w and h:
+                                            send_kwargs['width'] = w
+                                            send_kwargs['height'] = h
+                                        await bot.send_video(**send_kwargs)
+                                    else:
+                                        await bot.send_photo(chat_id=chat_id, photo=fobj, caption=cap)
+                                    if i < len(photos) - 1:
+                                        await asyncio.sleep(0.5)
+                                except Exception as e:
+                                    logger.error(f"IG send [{i}] error: {e}")
+                                    await asyncio.sleep(1)
                     else:
                         if not get_instagram_cookiefile():
                             raise RuntimeError('Instagram требует cookies. Обновите cookies.txt')
