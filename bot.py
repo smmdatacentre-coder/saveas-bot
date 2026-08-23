@@ -493,6 +493,60 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram yt-dlp fallback error: {e}")
 
+    # instaloader fallback — works WITHOUT cookies
+    if not photos:
+        try:
+            import instaloader as _il
+            loader = _il.Instaloader(
+                quiet=True, download_pictures=False, download_videos=False,
+                download_video_thumbnails=False, download_geotags=False,
+                download_comments=False, save_metadata=False, compress_json=False,
+            )
+            sc_match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?]+)', url)
+            if sc_match:
+                shortcode = sc_match.group(1)
+                post = _il.Post.from_shortcode(loader.context, shortcode)
+                if post.is_video and post.video_url:
+                    fp = os.path.join(tmp_dir, f"{post.shortcode}.mp4")
+                    dr = requests.get(post.video_url, timeout=120)
+                    if dr.status_code == 200:
+                        with open(fp, 'wb') as f:
+                            f.write(dr.content)
+                        if os.path.getsize(fp) > 0:
+                            caption = post.caption or ''
+                            photos.append(fp)
+                elif post.url:
+                    fp = os.path.join(tmp_dir, f"{post.shortcode}.jpg")
+                    dr = requests.get(post.url, timeout=60)
+                    if dr.status_code == 200:
+                        with open(fp, 'wb') as f:
+                            f.write(dr.content)
+                        if os.path.getsize(fp) > 0:
+                            caption = post.caption or ''
+                            photos.append(fp)
+                # Handle carousels
+                if not photos and post.typename == 'GraphSidecar':
+                    for i, node in enumerate(post.get_sidecar_nodes()):
+                        if node.is_video and node.video_url:
+                            ext = 'mp4'
+                            dl_url = node.video_url
+                        elif node.display_url:
+                            ext = 'jpg'
+                            dl_url = node.display_url
+                        else:
+                            continue
+                        fp = os.path.join(tmp_dir, f"{i}.{ext}")
+                        dr = requests.get(dl_url, timeout=60)
+                        if dr.status_code == 200:
+                            with open(fp, 'wb') as f:
+                                f.write(dr.content)
+                            if os.path.getsize(fp) > 0:
+                                photos.append(fp)
+                    if photos:
+                        caption = post.caption or ''
+        except Exception as e:
+            logger.error(f"Instagram instaloader fallback error: {e}")
+
     return photos, caption, tmp_dir
 
 
