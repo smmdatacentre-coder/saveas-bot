@@ -465,38 +465,49 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram story API error: {e}")
 
-        # instaloader fallback for stories
+        # instaloader fallback for stories (with timeout)
         try:
             import instaloader as _il
-            loader = _il.Instaloader(
-                quiet=True, download_pictures=False, download_videos=False,
-                download_video_thumbnails=False, download_geotags=False,
-                download_comments=False, save_metadata=False, compress_json=False,
-            )
-            user_match = re.search(r'instagram\.com/stories/([^/]+)/', url)
-            if user_match:
-                username = user_match.group(1)
-                profile = _il.Profile.from_username(loader.context, username)
-                stories = loader.get_stories(user_ids=[profile.userid])
-                for story in stories:
-                    for item in story.get_items():
-                        if str(item.media_id) == pk or str(item.shortcode) == pk:
-                            if item.is_video and item.video_url:
-                                fp = os.path.join(tmp_dir, 'story.mp4')
-                                dr = requests.get(item.video_url, timeout=60)
-                                if dr.status_code == 200:
-                                    with open(fp, 'wb') as f:
-                                        f.write(dr.content)
-                                    if os.path.getsize(fp) > 0:
-                                        return [fp], '', tmp_dir
-                            elif item.url:
-                                fp = os.path.join(tmp_dir, 'story.jpg')
-                                dr = requests.get(item.url, timeout=60)
-                                if dr.status_code == 200:
-                                    with open(fp, 'wb') as f:
-                                        f.write(dr.content)
-                                    if os.path.getsize(fp) > 0:
-                                        return [fp], '', tmp_dir
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
+
+            def _il_story():
+                loader = _il.Instaloader(
+                    quiet=True, download_pictures=False, download_videos=False,
+                    download_video_thumbnails=False, download_geotags=False,
+                    download_comments=False, save_metadata=False, compress_json=False,
+                )
+                user_match = re.search(r'instagram\.com/stories/([^/]+)/', url)
+                if user_match:
+                    username = user_match.group(1)
+                    profile = _il.Profile.from_username(loader.context, username)
+                    stories = loader.get_stories(user_ids=[profile.userid])
+                    for story in stories:
+                        for item in story.get_items():
+                            if str(item.media_id) == pk or str(item.shortcode) == pk:
+                                if item.is_video and item.video_url:
+                                    fp = os.path.join(tmp_dir, 'story.mp4')
+                                    dr = requests.get(item.video_url, timeout=30)
+                                    if dr.status_code == 200:
+                                        with open(fp, 'wb') as f:
+                                            f.write(dr.content)
+                                        if os.path.getsize(fp) > 0:
+                                            return fp
+                                elif item.url:
+                                    fp = os.path.join(tmp_dir, 'story.jpg')
+                                    dr = requests.get(item.url, timeout=30)
+                                    if dr.status_code == 200:
+                                        with open(fp, 'wb') as f:
+                                            f.write(dr.content)
+                                        if os.path.getsize(fp) > 0:
+                                            return fp
+                return None
+
+            with ThreadPoolExecutor(1) as pool:
+                result = pool.submit(_il_story).result(timeout=25)
+                if result:
+                    return [result], '', tmp_dir
+        except _FutTimeout:
+            logger.error("Instagram story instaloader timeout")
         except Exception as e:
             logger.error(f"Instagram story instaloader fallback error: {e}")
 
@@ -528,39 +539,42 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram yt-dlp fallback error: {e}")
 
-    # instaloader fallback — works WITHOUT cookies
+    # instaloader fallback — works WITHOUT cookies (with timeout)
     if not photos:
         try:
             import instaloader as _il
-            loader = _il.Instaloader(
-                quiet=True, download_pictures=False, download_videos=False,
-                download_video_thumbnails=False, download_geotags=False,
-                download_comments=False, save_metadata=False, compress_json=False,
-            )
-            sc_match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?]+)', url)
-            if sc_match:
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout2
+
+            def _il_post():
+                loader = _il.Instaloader(
+                    quiet=True, download_pictures=False, download_videos=False,
+                    download_video_thumbnails=False, download_geotags=False,
+                    download_comments=False, save_metadata=False, compress_json=False,
+                )
+                sc_match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?]+)', url)
+                if not sc_match:
+                    return [], ''
                 shortcode = sc_match.group(1)
                 post = _il.Post.from_shortcode(loader.context, shortcode)
+                result_photos = []
+                cap = post.caption or ''
                 if post.is_video and post.video_url:
                     fp = os.path.join(tmp_dir, f"{post.shortcode}.mp4")
-                    dr = requests.get(post.video_url, timeout=120)
+                    dr = requests.get(post.video_url, timeout=60)
                     if dr.status_code == 200:
                         with open(fp, 'wb') as f:
                             f.write(dr.content)
                         if os.path.getsize(fp) > 0:
-                            caption = post.caption or ''
-                            photos.append(fp)
+                            result_photos.append(fp)
                 elif post.url:
                     fp = os.path.join(tmp_dir, f"{post.shortcode}.jpg")
-                    dr = requests.get(post.url, timeout=60)
+                    dr = requests.get(post.url, timeout=30)
                     if dr.status_code == 200:
                         with open(fp, 'wb') as f:
                             f.write(dr.content)
                         if os.path.getsize(fp) > 0:
-                            caption = post.caption or ''
-                            photos.append(fp)
-                # Handle carousels
-                if not photos and post.typename == 'GraphSidecar':
+                            result_photos.append(fp)
+                if not result_photos and post.typename == 'GraphSidecar':
                     for i, node in enumerate(post.get_sidecar_nodes()):
                         if node.is_video and node.video_url:
                             ext = 'mp4'
@@ -571,14 +585,21 @@ def download_ig_post(url):
                         else:
                             continue
                         fp = os.path.join(tmp_dir, f"{i}.{ext}")
-                        dr = requests.get(dl_url, timeout=60)
+                        dr = requests.get(dl_url, timeout=30)
                         if dr.status_code == 200:
                             with open(fp, 'wb') as f:
                                 f.write(dr.content)
                             if os.path.getsize(fp) > 0:
-                                photos.append(fp)
-                    if photos:
-                        caption = post.caption or ''
+                                result_photos.append(fp)
+                return result_photos, cap
+
+            with ThreadPoolExecutor(1) as pool:
+                r_photos, r_caption = pool.submit(_il_post).result(timeout=25)
+                photos = r_photos
+                if r_caption:
+                    caption = r_caption
+        except _FutTimeout2:
+            logger.error("Instagram instaloader timeout")
         except Exception as e:
             logger.error(f"Instagram instaloader fallback error: {e}")
 
