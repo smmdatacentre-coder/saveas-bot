@@ -396,42 +396,40 @@ def _ig_api_get(pk):
     return None
 
 
+def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
+    """Run gallery-dl and return downloaded files."""
+    if not cookies_file:
+        cookies_file = get_instagram_cookiefile()
+    cmd = [sys.executable, '-m', 'gallery_dl']
+    if cookies_file:
+        cmd += ['--cookies', cookies_file]
+    cmd += ['-d', tmp_dir, url]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    if result.returncode:
+        logger.error(f"Instagram gallery-dl error [{result.returncode}]: {result.stderr[-500:]}")
+    photos = []
+    for root, dirs, files in os.walk(tmp_dir):
+        for fn in sorted(files):
+            fp = os.path.join(root, fn)
+            if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                    w, h = extract_video_dimensions(fp)
+                    if w and h and w == h:
+                        logger.warning(f"IG gallery-dl: square video ({w}x{h}), removing")
+                        os.remove(fp)
+                        continue
+                photos.append(fp)
+    return photos
+
+
 def download_ig_post(url):
     photos = []
     caption = ''
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"ig_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
+    cookies_file = get_instagram_cookiefile()
 
-    if '/p/' in url.lower():
-        try:
-            cookies_file = get_instagram_cookiefile()
-            cmd = [sys.executable, '-m', 'gallery_dl']
-            if cookies_file:
-                cmd += ['--cookies', cookies_file]
-            cmd += ['-d', tmp_dir, url]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode:
-                logger.error(f"Instagram gallery-dl error: {result.stderr[-500:]}")
-            for root, dirs, files in os.walk(tmp_dir):
-                for fn in sorted(files):
-                    fp = os.path.join(root, fn)
-                    if os.path.isfile(fp) and os.path.getsize(fp) > 0:
-                        photos.append(fp)
-            if photos:
-                sc = _extract_ig_shortcode(url)
-                if sc:
-                    try:
-                        pk = _ig_get_media_pk(sc)
-                        if pk:
-                            item = _ig_api_get(pk)
-                            if item:
-                                caption = item.get('caption', {}).get('text', '') if item.get('caption') else ''
-                    except Exception:
-                        pass
-                return photos, caption, tmp_dir
-        except Exception as e:
-            logger.error(f"Instagram gallery-dl carousel error: {e}")
-
+    # Stories — only via IG API (no alternative)
     story_match = re.search(r'instagram\.com/stories/[^/]+/(\d+)', url)
     if story_match:
         pk = story_match.group(1)
@@ -467,132 +465,33 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram story API error: {e}")
 
-    shortcode = _extract_ig_shortcode(url)
-    if not shortcode:
-        m = re.search(r'instagram\.com/(?:reel|tv)/([^/?]+)', url)
-        if m:
-            shortcode = m.group(1)
+    # Everything else — gallery-dl first (minimal API usage)
+    photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
+    if photos:
+        return photos, caption, tmp_dir
 
-    if shortcode:
+    # yt-dlp fallback for non-carousel posts
+    if '/p/' not in url.lower():
         try:
-            pk = _ig_get_media_pk(shortcode)
-            if pk:
-                item = _ig_api_get(pk)
-                if item:
-                    caption = item.get('caption', {}).get('text', '') if item.get('caption') else ''
-                    media_type = item.get('media_type', 1)
-                    if media_type == 8:
-                        carousel = item.get('carousel_media', [])
-                        for i, c in enumerate(carousel):
-                            ct = c.get('media_type', 1)
-                            if ct == 2:
-                                vids = c.get('video_versions', [])
-                                if vids:
-                                    vids.sort(key=lambda v: v.get('width', 0) * v.get('height', 0), reverse=True)
-                                    dl_url = vids[0]['url']
-                                    ext = 'mp4'
-                                else:
-                                    continue
-                            else:
-                                imgs = c.get('image_versions2', {}).get('candidates', [])
-                                if imgs:
-                                    dl_url = imgs[0]['url']
-                                    ext = 'jpg'
-                                else:
-                                    continue
-                            try:
-                                dr = requests.get(dl_url, timeout=60, headers={'User-Agent': 'Instagram 301.0.0.27.98'})
-                                if dr.status_code == 200:
-                                    fp = os.path.join(tmp_dir, f"{i}.{ext}")
-                                    with open(fp, 'wb') as f:
-                                        f.write(dr.content)
-                                    photos.append(fp)
-                            except Exception as e:
-                                logger.error(f"carousel download [{i}]: {e}")
-                    elif media_type == 2:
-                        vids = item.get('video_versions', [])
-                        if vids:
-                            # Prefer non-square vertical version (height > width), then by area
-                            def ig_vkey(v):
-                                w2 = v.get('width', 0)
-                                h2 = v.get('height', 0)
-                                is_square = 1 if (w2 and h2 and w2 == h2) else 0
-                                return (is_square, -(w2 * h2))
-                            vids.sort(key=ig_vkey)
-                            chosen = vids[0]
-                            cw = chosen.get('width', 0)
-                            ch = chosen.get('height', 0)
-                            dr = requests.get(chosen['url'], timeout=120, headers={'User-Agent': 'Instagram 301.0.0.27.98'})
-                            if dr.status_code == 200:
-                                fp = os.path.join(tmp_dir, "0.mp4")
-                                with open(fp, 'wb') as f:
-                                    f.write(dr.content)
-                                photos.append(fp)
-                                if cw and ch and cw == ch:
-                                    logger.warning(f"IG reel {shortcode}: only square ({cw}x{ch}) available from API")
-                    else:
-                        imgs = item.get('image_versions2', {}).get('candidates', [])
-                        if imgs:
-                            dr = requests.get(imgs[0]['url'], timeout=60, headers={'User-Agent': 'Instagram 301.0.0.27.98'})
-                            if dr.status_code == 200:
-                                fp = os.path.join(tmp_dir, "0.jpg")
-                                with open(fp, 'wb') as f:
-                                    f.write(dr.content)
-                                photos.append(fp)
-        except Exception as e:
-            logger.error(f"IG API error: {e}")
-
-    # A /p/ URL can be a carousel. yt-dlp treats it as a video playlist and
-    # fails on image-only entries, so let gallery-dl handle posts directly.
-    if not photos and '/p/' not in url.lower():
-        try:
-            # Instagram API can reject the request even when yt-dlp can extract the media.
             ydl_opts = make_ydl_opts()
             ydl_opts['outtmpl'] = os.path.join(tmp_dir, '%(id)s.%(ext)s')
             ydl_opts['format'] = 'best[ext=mp4]/best'
-            cookies_file = get_instagram_cookiefile()
             if cookies_file:
                 ydl_opts['cookiefile'] = cookies_file
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if info:
-                    title = info.get('title', '') or caption
                     for fp in glob.glob(os.path.join(tmp_dir, f"{info.get('id', '')}.*")):
                         if os.path.isfile(fp) and os.path.getsize(fp) > 0:
-                            # Check if downloaded video is square (common issue with IG reels)
                             if fp.lower().endswith(('.mp4', '.mov', '.webm')):
                                 w, h = extract_video_dimensions(fp)
                                 if w and h and w == h:
-                                    logger.warning(f"IG yt-dlp fallback: square video ({w}x{h}), removing")
+                                    logger.warning(f"IG yt-dlp: square video ({w}x{h}), removing")
                                     os.remove(fp)
                                     continue
                             photos.append(fp)
         except Exception as e:
             logger.error(f"Instagram yt-dlp fallback error: {e}")
-
-    if not photos:
-        try:
-            cookies_file = get_instagram_cookiefile()
-            cmd = [sys.executable, '-m', 'gallery_dl']
-            if cookies_file:
-                cmd += ['--cookies', cookies_file]
-            cmd += ['-d', tmp_dir, url]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode:
-                logger.error(f"Instagram gallery-dl error: {result.stderr[-500:]}")
-            for root, dirs, files in os.walk(tmp_dir):
-                for fn in sorted(files):
-                    fp = os.path.join(root, fn)
-                    if os.path.getsize(fp) > 0:
-                        if fp.lower().endswith(('.mp4', '.mov', '.webm')):
-                            w, h = extract_video_dimensions(fp)
-                            if w and h and w == h:
-                                logger.warning(f"IG gallery-dl: square video ({w}x{h}), removing")
-                                os.remove(fp)
-                                continue
-                        photos.append(fp)
-        except Exception as e:
-            logger.error(f"gallery-dl fallback error: {e}")
 
     return photos, caption, tmp_dir
 
@@ -2209,7 +2108,7 @@ async def process_queue(chat_id, bot, loop):
                     else:
                         if not get_instagram_cookiefile():
                             raise RuntimeError('Instagram требует cookies. Обновите cookies.txt')
-                        raise RuntimeError('Instagram: cookies устарели или пост приватный. Обновите cookies.txt')
+                        raise RuntimeError('Instagram: не удалось загрузить пост. Возможно, cookies устарели или пост приватный. Попробуйте обновить cookies.txt')
 
                     queue.pop(0)
                     await update_status(build_queue_text(queue))
