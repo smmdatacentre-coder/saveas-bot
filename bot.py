@@ -511,36 +511,8 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram story instaloader fallback error: {e}")
 
-    # Everything else — gallery-dl first (minimal API usage)
-    photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
-    if photos:
-        return photos, caption, tmp_dir
-
-    # yt-dlp fallback for non-carousel posts
+    # instaloader FIRST — works WITHOUT cookies
     if '/p/' not in url.lower():
-        try:
-            ydl_opts = make_ydl_opts()
-            ydl_opts['outtmpl'] = os.path.join(tmp_dir, '%(id)s.%(ext)s')
-            ydl_opts['format'] = 'best[ext=mp4]/best'
-            if cookies_file:
-                ydl_opts['cookiefile'] = cookies_file
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                if info:
-                    for fp in glob.glob(os.path.join(tmp_dir, f"{info.get('id', '')}.*")):
-                        if os.path.isfile(fp) and os.path.getsize(fp) > 0:
-                            if fp.lower().endswith(('.mp4', '.mov', '.webm')):
-                                w, h = extract_video_dimensions(fp)
-                                if w and h and w == h:
-                                    logger.warning(f"IG yt-dlp: square video ({w}x{h}), removing")
-                                    os.remove(fp)
-                                    continue
-                            photos.append(fp)
-        except Exception as e:
-            logger.error(f"Instagram yt-dlp fallback error: {e}")
-
-    # instaloader fallback — works WITHOUT cookies (with timeout)
-    if not photos:
         try:
             import instaloader as _il
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout2
@@ -602,6 +574,32 @@ def download_ig_post(url):
             logger.error("Instagram instaloader timeout")
         except Exception as e:
             logger.error(f"Instagram instaloader fallback error: {e}")
+
+    # gallery-dl fallback (needs cookies)
+    if not photos:
+        photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
+
+    # yt-dlp fallback (needs cookies, non-carousel only)
+    if not photos and '/p/' not in url.lower():
+        try:
+            ydl_opts = make_ydl_opts()
+            ydl_opts['outtmpl'] = os.path.join(tmp_dir, '%(id)s.%(ext)s')
+            ydl_opts['format'] = 'best[ext=mp4]/best'
+            if cookies_file:
+                ydl_opts['cookiefile'] = cookies_file
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if info:
+                    for fp in glob.glob(os.path.join(tmp_dir, f"{info.get('id', '')}.*")):
+                        if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                            if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                                w, h = extract_video_dimensions(fp)
+                                if w and h and w == h:
+                                    os.remove(fp)
+                                    continue
+                            photos.append(fp)
+        except Exception as e:
+            logger.error(f"Instagram yt-dlp fallback error: {e}")
 
     return photos, caption, tmp_dir
 
