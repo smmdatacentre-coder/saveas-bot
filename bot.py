@@ -429,7 +429,7 @@ def download_ig_post(url):
     os.makedirs(tmp_dir, exist_ok=True)
     cookies_file = get_instagram_cookiefile()
 
-    # Stories — only via IG API (no alternative)
+    # Stories — IG API first, instaloader fallback
     story_match = re.search(r'instagram\.com/stories/[^/]+/(\d+)', url)
     if story_match:
         pk = story_match.group(1)
@@ -464,6 +464,41 @@ def download_ig_post(url):
                                     return [fp], '', tmp_dir
         except Exception as e:
             logger.error(f"Instagram story API error: {e}")
+
+        # instaloader fallback for stories
+        try:
+            import instaloader as _il
+            loader = _il.Instaloader(
+                quiet=True, download_pictures=False, download_videos=False,
+                download_video_thumbnails=False, download_geotags=False,
+                download_comments=False, save_metadata=False, compress_json=False,
+            )
+            user_match = re.search(r'instagram\.com/stories/([^/]+)/', url)
+            if user_match:
+                username = user_match.group(1)
+                profile = _il.Profile.from_username(loader.context, username)
+                stories = loader.get_stories(user_ids=[profile.userid])
+                for story in stories:
+                    for item in story.get_items():
+                        if str(item.media_id) == pk or str(item.shortcode) == pk:
+                            if item.is_video and item.video_url:
+                                fp = os.path.join(tmp_dir, 'story.mp4')
+                                dr = requests.get(item.video_url, timeout=60)
+                                if dr.status_code == 200:
+                                    with open(fp, 'wb') as f:
+                                        f.write(dr.content)
+                                    if os.path.getsize(fp) > 0:
+                                        return [fp], '', tmp_dir
+                            elif item.url:
+                                fp = os.path.join(tmp_dir, 'story.jpg')
+                                dr = requests.get(item.url, timeout=60)
+                                if dr.status_code == 200:
+                                    with open(fp, 'wb') as f:
+                                        f.write(dr.content)
+                                    if os.path.getsize(fp) > 0:
+                                        return [fp], '', tmp_dir
+        except Exception as e:
+            logger.error(f"Instagram story instaloader fallback error: {e}")
 
     # Everything else — gallery-dl first (minimal API usage)
     photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
