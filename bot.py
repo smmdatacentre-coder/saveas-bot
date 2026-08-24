@@ -319,26 +319,24 @@ def get_youtube_proxy():
 
 
 _ig_proxy_cache = None
-_ig_proxy_checked = False
+_ig_proxy_ts = 0
 
 def get_ig_proxy():
-    global _ig_proxy_cache, _ig_proxy_checked
-    if _ig_proxy_checked:
+    global _ig_proxy_cache, _ig_proxy_ts
+    now = time.time()
+    if _ig_proxy_cache is not None and now - _ig_proxy_ts < 60:
         return _ig_proxy_cache
-    _ig_proxy_checked = True
-    raw = os.environ.get('IG_PROXY', '').strip()
-    if not raw:
-        return None
+    _ig_proxy_ts = now
+    raw = os.environ.get('IG_PROXY', '').strip() or 'socks5://127.0.0.1:1080'
     try:
         import socket
         s = socket.create_connection(('127.0.0.1', 1080), timeout=2)
         s.close()
         _ig_proxy_cache = raw
-        logger.info(f"IG proxy OK: {raw}")
+        return _ig_proxy_cache
     except Exception:
-        logger.warning("IG proxy unreachable on 127.0.0.1:1080, using direct connection")
         _ig_proxy_cache = None
-    return _ig_proxy_cache
+        return None
 
 
 def make_ydl_opts(fmt=None, quality=None):
@@ -480,21 +478,30 @@ def _ig_get_media_pk(shortcode):
 def _ig_api_get(pk):
     cookies = _load_ig_cookies()
     ig_proxy = get_ig_proxy()
-    s = requests.Session()
-    if ig_proxy:
-        s.proxies = {'http': ig_proxy, 'https': ig_proxy}
-    for k, v in cookies.items():
-        s.cookies.set(k, v, domain='.instagram.com')
-    s.headers.update({
-        'User-Agent': 'Instagram 301.0.0.27.98 (iPhone16,2; iOS 17_5_1)',
-        'X-IG-App-ID': '936619743392459',
-        'X-CSRFToken': cookies.get('csrftoken', ''),
-    })
-    r = s.get(f'https://i.instagram.com/api/v1/media/{pk}/info/', timeout=15)
-    if r.status_code == 200:
-        items = r.json().get('items', [])
-        if items:
-            return items[0]
+    try:
+        from curl_cffi import requests as cf_requests
+        cf_cookies = {k: v for k, v in cookies.items()}
+        proxies = f"socks5://127.0.0.1:1080" if ig_proxy and '127.0.0.1:1080' in ig_proxy else (ig_proxy or None)
+        r = cf_requests.get(
+            f'https://i.instagram.com/api/v1/media/{pk}/info/',
+            impersonate="chrome",
+            cookies=cf_cookies,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'X-IG-App-ID': '936619743392459',
+                'X-CSRFToken': cookies.get('csrftoken', ''),
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            timeout=15,
+            proxies=proxies,
+        )
+        if r.status_code == 200:
+            items = r.json().get('items', [])
+            if items:
+                return items[0]
+    except Exception as e:
+        logger.error(f"Instagram API curl_cffi error: {e}")
     return None
 
 
@@ -717,6 +724,18 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     return photos
 
 
+def _ig_download_bytes(url, timeout=60):
+    """Download bytes from IG URL using curl_cffi (bypasses TLS fingerprinting)."""
+    try:
+        from curl_cffi import requests as cf_requests
+        r = cf_requests.get(url, impersonate="chrome", timeout=timeout)
+        if r.status_code == 200:
+            return r.content
+    except Exception as e:
+        logger.error(f"curl_cffi download error: {e}")
+    return None
+
+
 def download_ig_post(url):
     photos = []
     caption = ''
@@ -739,11 +758,11 @@ def download_ig_post(url):
                     if vids:
                         vids.sort(key=lambda v: v.get('width', 0) * v.get('height', 0), reverse=True)
                         dl_url = vids[0]['url']
-                        dr = requests.get(dl_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=60, proxies=_ig_prx)
-                        if dr.status_code == 200:
+                        data = _ig_download_bytes(dl_url)
+                        if data:
                             fp = os.path.join(tmp_dir, 'story.mp4')
                             with open(fp, 'wb') as f:
-                                f.write(dr.content)
+                                f.write(data)
                             if os.path.getsize(fp) > 0:
                                 return [fp], '', tmp_dir
                 elif item.get('image_versions2'):
@@ -752,11 +771,11 @@ def download_ig_post(url):
                         best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
                         dl_url = best.get('url')
                         if dl_url:
-                            dr = requests.get(dl_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=60, proxies=_ig_prx)
-                            if dr.status_code == 200:
+                            data = _ig_download_bytes(dl_url)
+                            if data:
                                 fp = os.path.join(tmp_dir, 'story.jpg')
                                 with open(fp, 'wb') as f:
-                                    f.write(dr.content)
+                                    f.write(data)
                                 if os.path.getsize(fp) > 0:
                                     return [fp], '', tmp_dir
         except Exception as e:
@@ -787,18 +806,18 @@ def download_ig_post(url):
                             if str(item.media_id) == pk or str(item.shortcode) == pk:
                                 if item.is_video and item.video_url:
                                     fp = os.path.join(tmp_dir, 'story.mp4')
-                                    dr = requests.get(item.video_url, timeout=30, proxies={'http': ig_proxy, 'https': ig_proxy} if ig_proxy else None)
-                                    if dr.status_code == 200:
+                                    data = _ig_download_bytes(item.video_url)
+                                    if data:
                                         with open(fp, 'wb') as f:
-                                            f.write(dr.content)
+                                            f.write(data)
                                         if os.path.getsize(fp) > 0:
                                             return fp
                                 elif item.url:
                                     fp = os.path.join(tmp_dir, 'story.jpg')
-                                    dr = requests.get(item.url, timeout=30, proxies={'http': ig_proxy, 'https': ig_proxy} if ig_proxy else None)
-                                    if dr.status_code == 200:
+                                    data = _ig_download_bytes(item.url)
+                                    if data:
                                         with open(fp, 'wb') as f:
-                                            f.write(dr.content)
+                                            f.write(data)
                                         if os.path.getsize(fp) > 0:
                                             return fp
                 return None
@@ -848,18 +867,18 @@ def download_ig_post(url):
                 cap = post.caption or ''
                 if post.is_video and post.video_url:
                     fp = os.path.join(tmp_dir, f"{post.shortcode}.mp4")
-                    dr = requests.get(post.video_url, timeout=60, proxies=_ig_prx)
-                    if dr.status_code == 200:
+                    data = _ig_download_bytes(post.video_url)
+                    if data:
                         with open(fp, 'wb') as f:
-                            f.write(dr.content)
+                            f.write(data)
                         if os.path.getsize(fp) > 0:
                             result_photos.append(fp)
                 elif post.url:
                     fp = os.path.join(tmp_dir, f"{post.shortcode}.jpg")
-                    dr = requests.get(post.url, timeout=30, proxies=_ig_prx)
-                    if dr.status_code == 200:
+                    data = _ig_download_bytes(post.url)
+                    if data:
                         with open(fp, 'wb') as f:
-                            f.write(dr.content)
+                            f.write(data)
                         if os.path.getsize(fp) > 0:
                             result_photos.append(fp)
                 if not result_photos and post.typename == 'GraphSidecar':
@@ -873,10 +892,10 @@ def download_ig_post(url):
                         else:
                             continue
                         fp = os.path.join(tmp_dir, f"{i}.{ext}")
-                        dr = requests.get(dl_url, timeout=30, proxies=_ig_prx)
-                        if dr.status_code == 200:
+                        data = _ig_download_bytes(dl_url)
+                        if data:
                             with open(fp, 'wb') as f:
-                                f.write(dr.content)
+                                f.write(data)
                             if os.path.getsize(fp) > 0:
                                 result_photos.append(fp)
                 return result_photos, cap
