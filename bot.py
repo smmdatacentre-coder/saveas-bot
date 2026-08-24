@@ -690,7 +690,7 @@ def download_ig_post(url):
                     for story in stories:
                         for item in story.get_items():
                             if str(item.media_id) == pk or str(item.shortcode) == pk:
-                                    if item.is_video and item.video_url:
+                                if item.is_video and item.video_url:
                                     fp = os.path.join(tmp_dir, 'story.mp4')
                                     dr = requests.get(item.video_url, timeout=30, proxies={'http': ig_proxy, 'https': ig_proxy} if ig_proxy else None)
                                     if dr.status_code == 200:

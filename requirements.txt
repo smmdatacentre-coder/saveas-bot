@@ -8,3 +8,5 @@ gallery-dl
 curl_cffi>=0.7.0
 instaloader>=4.10
 playwright>=1.40
+PySocks>=1.7.1
+aiohttp-socks>=0.8.0
