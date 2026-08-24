@@ -30,6 +30,64 @@ os.environ['PATH'] = BOT_DIR + ':' + os.environ.get('PATH', '')
 ADMIN_ID = 256869382
 ERROR_SUFFIX = "\n\n📞 Сообщите об ошибке @d8shot_manager_bot и приложите скрин — пофиксим в ближайшее время!"
 
+XRAY_BIN = '/tmp/xray'
+XRAY_CFG = '/tmp/xray.json'
+XRAY_VLESS_CONFIG = {
+    "log": {"loglevel": "warning"},
+    "inbounds": [{"port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": {"udp": True}}],
+    "outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "222.167.217.182", "port": 8443, "users": [{"id": "1be3a16d-9e39-451d-bc13-5b99e723c8af", "encryption": "none"}]}]}, "streamSettings": {"network": "xhttp", "security": "reality", "realitySettings": {"serverName": "stackoverflow.com", "fingerprint": "firefox", "publicKey": "Dkhc0OnlL2ATHD5rhSZ8YBpQ3R5gKKlaNReaI8KW0Ug", "shortId": "", "spiderX": "/"}}}]
+}
+
+
+def _ensure_xray():
+    if os.path.exists(XRAY_BIN):
+        return
+    try:
+        import platform
+        arch = platform.machine()
+        url = f"https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-{'64' if arch in ('x86_64', 'amd64') else 'arm64' if arch in ('aarch64', 'arm64') else '64'}"
+        logger.info(f"Downloading xray-core from {url}")
+        subprocess.run(['curl', '-sL', '-o', XRAY_BIN, url], timeout=60)
+        os.chmod(XRAY_BIN, 0o755)
+        logger.info("xray-core downloaded")
+    except Exception as e:
+        logger.error(f"Failed to download xray: {e}")
+
+
+def _start_xray():
+    if not os.path.exists(XRAY_BIN):
+        return False
+    try:
+        import socket
+        s = socket.create_connection(('127.0.0.1', 1080), timeout=2)
+        s.close()
+        logger.info("xray already running")
+        return True
+    except Exception:
+        pass
+    try:
+        with open(XRAY_CFG, 'w') as f:
+            json.dump(XRAY_VLESS_CONFIG, f)
+        subprocess.Popen(
+            [XRAY_BIN, 'run', '-c', XRAY_CFG],
+            stdout=open('/tmp/xray.log', 'w'),
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        import time
+        time.sleep(2)
+        s = socket.create_connection(('127.0.0.1', 1080), timeout=3)
+        s.close()
+        logger.info("xray started OK on 127.0.0.1:1080")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to start xray: {e}")
+        return False
+
+
+_ensure_xray()
+_start_xray()
+
 user_queues = {}
 user_locks = {}
 pending_yt = {}
