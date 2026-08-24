@@ -242,8 +242,27 @@ def get_youtube_proxy():
     return os.environ.get('YOUTUBE_PROXY', '').strip() or None
 
 
+_ig_proxy_cache = None
+_ig_proxy_checked = False
+
 def get_ig_proxy():
-    return os.environ.get('IG_PROXY', '').strip() or None
+    global _ig_proxy_cache, _ig_proxy_checked
+    if _ig_proxy_checked:
+        return _ig_proxy_cache
+    _ig_proxy_checked = True
+    raw = os.environ.get('IG_PROXY', '').strip()
+    if not raw:
+        return None
+    try:
+        import socket
+        s = socket.create_connection(('127.0.0.1', 1080), timeout=2)
+        s.close()
+        _ig_proxy_cache = raw
+        logger.info(f"IG proxy OK: {raw}")
+    except Exception:
+        logger.warning("IG proxy unreachable on 127.0.0.1:1080, using direct connection")
+        _ig_proxy_cache = None
+    return _ig_proxy_cache
 
 
 def make_ydl_opts(fmt=None, quality=None):
