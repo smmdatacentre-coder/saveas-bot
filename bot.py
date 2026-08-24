@@ -32,6 +32,7 @@ ERROR_SUFFIX = "\n\n📞 Сообщите об ошибке @d8shot_manager_bot 
 
 XRAY_BIN = '/tmp/xray'
 XRAY_CFG = '/tmp/xray.json'
+XRAY_REPO_BIN = os.path.join(BOT_DIR, 'xray_linux64')
 XRAY_VLESS_CONFIG = {
     "log": {"loglevel": "warning"},
     "inbounds": [{"port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": {"udp": True}}],
@@ -41,17 +42,25 @@ XRAY_VLESS_CONFIG = {
 
 def _ensure_xray():
     if os.path.exists(XRAY_BIN):
-        return
+        return True
     try:
+        if os.path.exists(XRAY_REPO_BIN):
+            shutil.copy2(XRAY_REPO_BIN, XRAY_BIN)
+            os.chmod(XRAY_BIN, 0o755)
+            logger.info("xray-core copied from repo")
+            return True
+        import urllib.request
         import platform
         arch = platform.machine()
-        url = f"https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-{'64' if arch in ('x86_64', 'amd64') else 'arm64' if arch in ('aarch64', 'arm64') else '64'}"
-        logger.info(f"Downloading xray-core from {url}")
-        subprocess.run(['curl', '-sL', '-o', XRAY_BIN, url], timeout=60)
+        suffix = '64' if arch in ('x86_64', 'amd64') else 'arm64' if arch in ('aarch64', 'arm64') else '64'
+        url = f"https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-{suffix}"
+        logger.info(f"Downloading xray: {url}")
+        urllib.request.urlretrieve(url, XRAY_BIN)
         os.chmod(XRAY_BIN, 0o755)
-        logger.info("xray-core downloaded")
+        return True
     except Exception as e:
-        logger.error(f"Failed to download xray: {e}")
+        logger.error(f"Failed to get xray: {e}")
+        return False
 
 
 def _start_xray():
@@ -85,8 +94,17 @@ def _start_xray():
         return False
 
 
-_ensure_xray()
-_start_xray()
+def _init_xray_bg():
+    import threading
+    def _worker():
+        try:
+            _ensure_xray()
+            _start_xray()
+        except Exception as e:
+            logger.error(f"xray init error: {e}")
+    threading.Thread(target=_worker, daemon=True).start()
+
+_init_xray_bg()
 
 user_queues = {}
 user_locks = {}
