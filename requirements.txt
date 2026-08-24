@@ -7,3 +7,4 @@ aiohttp==3.12.15
 gallery-dl
 curl_cffi>=0.7.0
 instaloader>=4.10
+playwright>=1.40

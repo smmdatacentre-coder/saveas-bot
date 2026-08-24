@@ -396,6 +396,177 @@ def _ig_api_get(pk):
     return None
 
 
+def _load_ig_cookies_for_playwright():
+    """Parse cookies.txt (Netscape format) into Playwright cookie list."""
+    cookies_file = get_instagram_cookiefile()
+    if not cookies_file or not os.path.isfile(cookies_file):
+        return []
+    pw_cookies = []
+    try:
+        with open(cookies_file) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('#') or not line:
+                    continue
+                parts = line.split('\t')
+                if len(parts) >= 7:
+                    domain = parts[0]
+                    path = parts[2]
+                    secure = parts[3].upper() == 'TRUE'
+                    name = parts[5]
+                    value = parts[6]
+                    pw_cookies.append({
+                        'name': name,
+                        'value': value,
+                        'domain': domain,
+                        'path': path,
+                        'secure': secure,
+                    })
+    except Exception as e:
+        logger.error(f"Error parsing cookies for playwright: {e}")
+    return pw_cookies
+
+
+def _download_ig_browser(url, tmp_dir):
+    """Download IG post/reel using headless Chrome (Playwright).
+    Real browser TLS fingerprint bypasses Instagram API-level blocking."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        logger.warning("playwright not installed, skipping browser fallback")
+        return [], ''
+
+    photos = []
+    caption = ''
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=[
+                '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+            ])
+            context = browser.new_context(
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                viewport={'width': 1920, 'height': 1080},
+                locale='en-US',
+            )
+
+            pw_cookies = _load_ig_cookies_for_playwright()
+            if pw_cookies:
+                try:
+                    context.add_cookies(pw_cookies)
+                except Exception:
+                    pass
+
+            page = context.new_page()
+
+            media_captured = {}
+
+            def _on_resp(resp):
+                try:
+                    ct = resp.headers.get('content-type', '')
+                    rurl = resp.url
+                    if 'video/' in ct or ('image/' in ct and 'svg' not in ct):
+                        if 'instagram' in rurl or 'cdninstagram' in rurl:
+                            skip = ['profile_pic', 's150x150', 'emoji', '44x44', '72x72', '936x936', '150x150', 's320x320']
+                            if not any(s in rurl for s in skip):
+                                body = resp.body()
+                                if body and len(body) > 5000:
+                                    media_captured[rurl.split('?')[0]] = (body, ct)
+                except Exception:
+                    pass
+
+            page.on('response', _on_resp)
+
+            try:
+                page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            except Exception:
+                pass
+            page.wait_for_timeout(5000)
+
+            if page.query_selector('input[name="username"], #loginForm'):
+                logger.warning("Instagram browser: login wall detected")
+                browser.close()
+                return [], ''
+
+            # Extract caption
+            try:
+                for sel in ['h1', '[data-testid="post-comment-root"] span']:
+                    for el in page.query_selector_all(sel):
+                        txt = el.inner_text().strip()
+                        if txt and 2 < len(txt) < 2000:
+                            caption = txt
+                            break
+                    if caption:
+                        break
+            except Exception:
+                pass
+
+            # Carousel: click "Next" to load all slides
+            try:
+                for _ in range(9):
+                    next_btns = page.query_selector_all('button[aria-label="Next"], [aria-label="Next"]')
+                    if not next_btns:
+                        break
+                    next_btns[0].click()
+                    page.wait_for_timeout(1500)
+            except Exception:
+                pass
+
+            # DOM extraction backup
+            try:
+                for ve in page.query_selector_all('video'):
+                    src = ve.get_attribute('src')
+                    if src and ('instagram' in src or 'cdninstagram' in src):
+                        key = src.split('?')[0]
+                        if key not in media_captured:
+                            try:
+                                resp = page.request.get(src)
+                                if resp.ok:
+                                    body = resp.body()
+                                    if body and len(body) > 5000:
+                                        media_captured[key] = (body, 'video/mp4')
+                            except Exception:
+                                pass
+
+                for ie in page.query_selector_all('article img, [role="presentation"] img'):
+                    src = ie.get_attribute('src')
+                    if src and ('instagram' in src or 'cdninstagram' in src):
+                        if not any(s in src for s in ['profile_pic', 's150x150', 'emoji']):
+                            key = src.split('?')[0]
+                            if key not in media_captured:
+                                try:
+                                    resp = page.request.get(src)
+                                    if resp.ok:
+                                        body = resp.body()
+                                        if body and len(body) > 5000:
+                                            media_captured[key] = (body, 'image/jpeg')
+                                except Exception:
+                                    pass
+            except Exception:
+                pass
+
+            browser.close()
+
+    except Exception as e:
+        logger.error(f"Instagram browser error: {e}")
+        return [], ''
+
+    idx = 0
+    for key, (body, ct) in media_captured.items():
+        try:
+            ext = 'mp4' if 'video' in ct else 'jpg'
+            fp = os.path.join(tmp_dir, f"web_{idx}.{ext}")
+            with open(fp, 'wb') as f:
+                f.write(body)
+            if os.path.getsize(fp) > 0:
+                photos.append(fp)
+                idx += 1
+        except Exception:
+            pass
+
+    return photos, caption
+
+
 def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     """Run gallery-dl and return downloaded files."""
     if not cookies_file:
@@ -511,6 +682,18 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram story instaloader fallback error: {e}")
 
+        # Browser fallback for stories
+        try:
+            from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _FutTimeoutS
+            with _TPE(1) as pool:
+                b_photos, _ = pool.submit(_download_ig_browser, url, tmp_dir).result(timeout=45)
+                if b_photos:
+                    return b_photos, '', tmp_dir
+        except _FutTimeoutS:
+            logger.error("Instagram story browser timeout")
+        except Exception as e:
+            logger.error(f"Instagram story browser fallback error: {e}")
+
     # instaloader FIRST — works WITHOUT cookies
     if '/p/' not in url.lower():
         try:
@@ -574,6 +757,25 @@ def download_ig_post(url):
             logger.error("Instagram instaloader timeout")
         except Exception as e:
             logger.error(f"Instagram instaloader fallback error: {e}")
+
+    # Browser fallback — headless Chrome bypasses API blocking
+    if not photos:
+        try:
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout3
+
+            def _browser_dl():
+                return _download_ig_browser(url, tmp_dir)
+
+            with ThreadPoolExecutor(1) as pool:
+                b_photos, b_caption = pool.submit(_browser_dl).result(timeout=45)
+                if b_photos:
+                    photos = b_photos
+                    if b_caption:
+                        caption = b_caption
+        except _FutTimeout3:
+            logger.error("Instagram browser fallback timeout")
+        except Exception as e:
+            logger.error(f"Instagram browser fallback error: {e}")
 
     # gallery-dl fallback (needs cookies)
     if not photos:
