@@ -13,6 +13,18 @@ import asyncio
 import shutil
 import requests
 import yt_dlp
+
+try:
+    from curl_cffi import requests as cf_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+    subprocess.run([sys.executable, '-m', 'pip', 'install', 'curl_cffi', '-q'], timeout=120)
+    try:
+        from curl_cffi import requests as cf_requests
+        HAS_CURL_CFFI = True
+    except Exception:
+        HAS_CURL_CFFI = False
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -387,26 +399,27 @@ def _ig_get_media_pk(shortcode):
 
 def _ig_api_get(pk):
     cookies = _load_ig_cookies()
+    cf_cookies = {k: v for k, v in cookies.items()}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'X-IG-App-ID': '936619743392459',
+        'X-CSRFToken': cookies.get('csrftoken', ''),
+    }
     try:
-        from curl_cffi import requests as cf_requests
-        cf_cookies = {k: v for k, v in cookies.items()}
-        r = cf_requests.get(
-            f'https://i.instagram.com/api/v1/media/{pk}/info/',
-            impersonate="chrome",
-            cookies=cf_cookies,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-                'X-IG-App-ID': '936619743392459',
-                'X-CSRFToken': cookies.get('csrftoken', ''),
-            },
-            timeout=15,
-        )
+        if HAS_CURL_CFFI:
+            r = cf_requests.get(
+                f'https://i.instagram.com/api/v1/media/{pk}/info/',
+                impersonate="chrome", cookies=cf_cookies, headers=headers, timeout=15,
+            )
+        else:
+            r = requests.get(
+                f'https://i.instagram.com/api/v1/media/{pk}/info/',
+                cookies=cf_cookies, headers=headers, timeout=15,
+            )
         if r.status_code == 200:
             items = r.json().get('items', [])
             if items:
                 return items[0]
-    except ImportError:
-        logger.error("curl_cffi not installed! Run: pip install curl_cffi")
     except Exception as e:
         logger.error(f"Instagram API error: {e}")
     return None
@@ -626,12 +639,14 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
 def _ig_download_bytes(url, timeout=60):
     """Download bytes from IG URL using curl_cffi (bypasses TLS fingerprinting)."""
     try:
-        from curl_cffi import requests as cf_requests
-        r = cf_requests.get(url, impersonate="chrome", timeout=timeout)
+        if HAS_CURL_CFFI:
+            r = cf_requests.get(url, impersonate="chrome", timeout=timeout)
+        else:
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}, timeout=timeout)
         if r.status_code == 200:
             return r.content
     except Exception as e:
-        logger.error(f"curl_cffi download error: {e}")
+        logger.error(f"IG download error: {e}")
     return None
 
 
