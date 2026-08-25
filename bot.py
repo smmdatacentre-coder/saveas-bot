@@ -20,12 +20,12 @@ try:
     HAS_CURL_CFFI = True
 except ImportError:
     HAS_CURL_CFFI = False
-    subprocess.run([sys.executable, '-m', 'pip', 'install', 'curl_cffi', '-q'], timeout=120)
-    try:
-        from curl_cffi import requests as cf_requests
-        HAS_CURL_CFFI = True
-    except Exception:
-        HAS_CURL_CFFI = False
+    def _install_curl_cffi():
+        try:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', 'curl_cffi', '-q'], timeout=120)
+        except Exception:
+            pass
+    threading.Thread(target=_install_curl_cffi, daemon=True).start()
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -116,7 +116,14 @@ def _ig_proxies():
     return None
 
 
-threading.Thread(target=_init_xray, daemon=True).start()
+_xray_started = False
+
+def _ensure_xray_once():
+    global _xray_started
+    if _xray_started:
+        return
+    _xray_started = True
+    _init_xray()
 
 
 def get_ffmpeg_path():
@@ -718,17 +725,6 @@ def _ig_download_bytes(url, timeout=30):
     except Exception as e:
         logger.error(f"IG download error: {e}")
     return None
-
-
-def _download_ig_post_timeout(url, total_timeout=40):
-    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FTE
-    with ThreadPoolExecutor(1) as pool:
-        future = pool.submit(download_ig_post, url)
-        try:
-            return future.result(timeout=total_timeout)
-        except _FTE:
-            logger.error(f"Instagram download timed out after {total_timeout}s")
-            return [], '', ''
 
 
 def download_ig_post(url):
@@ -2252,6 +2248,7 @@ async def process_queue(chat_id, bot, loop):
     async with lock:
         queue = user_queues.get(chat_id, [])
         status_msg = None
+        logger.info(f"Queue worker started for chat {chat_id}, {len(queue)} items")
 
         async def update_status(text):
             nonlocal status_msg
@@ -2506,9 +2503,16 @@ async def process_queue(chat_id, bot, loop):
                     task.start_time = time.time()
                     await update_status(build_queue_text(queue))
 
-                    photos, caption, ig_tmp_dir = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: _download_ig_post_timeout(task.url, 40)
-                    )
+                    try:
+                        photos, caption, ig_tmp_dir = await asyncio.wait_for(
+                            asyncio.get_event_loop().run_in_executor(
+                                None, lambda: download_ig_post(task.url)
+                            ),
+                            timeout=45,
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error("Instagram download timed out after 45s")
+                        photos, caption, ig_tmp_dir = [], '', ''
 
                     if photos:
                         task.status = 'done'
@@ -2718,6 +2722,8 @@ async def main():
     if not token:
         print("❌ Нет токена")
         return
+
+    threading.Thread(target=_ensure_xray_once, daemon=True).start()
 
     user_queues.clear()
     user_locks.clear()
