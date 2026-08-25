@@ -30,82 +30,6 @@ os.environ['PATH'] = BOT_DIR + ':' + os.environ.get('PATH', '')
 ADMIN_ID = 256869382
 ERROR_SUFFIX = "\n\n📞 Сообщите об ошибке @d8shot_manager_bot и приложите скрин — пофиксим в ближайшее время!"
 
-XRAY_BIN = '/tmp/xray'
-XRAY_CFG = '/tmp/xray.json'
-XRAY_REPO_BIN = os.path.join(BOT_DIR, 'xray_linux64')
-XRAY_VLESS_CONFIG = {
-    "log": {"loglevel": "warning"},
-    "inbounds": [{"port": 1080, "listen": "0.0.0.0", "protocol": "socks", "settings": {"udp": True}}],
-    "outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "222.167.217.182", "port": 8443, "users": [{"id": "1be3a16d-9e39-451d-bc13-5b99e723c8af", "encryption": "none"}]}]}, "streamSettings": {"network": "xhttp", "security": "reality", "realitySettings": {"serverName": "stackoverflow.com", "fingerprint": "firefox", "publicKey": "Dkhc0OnlL2ATHD5rhSZ8YBpQ3R5gKKlaNReaI8KW0Ug", "shortId": "", "spiderX": "/"}}}]
-}
-
-
-def _ensure_xray():
-    if os.path.exists(XRAY_BIN):
-        return True
-    try:
-        if os.path.exists(XRAY_REPO_BIN):
-            shutil.copy2(XRAY_REPO_BIN, XRAY_BIN)
-            os.chmod(XRAY_BIN, 0o755)
-            logger.info("xray-core copied from repo")
-            return True
-        import urllib.request
-        import platform
-        arch = platform.machine()
-        suffix = '64' if arch in ('x86_64', 'amd64') else 'arm64' if arch in ('aarch64', 'arm64') else '64'
-        url = f"https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-{suffix}"
-        logger.info(f"Downloading xray: {url}")
-        urllib.request.urlretrieve(url, XRAY_BIN)
-        os.chmod(XRAY_BIN, 0o755)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to get xray: {e}")
-        return False
-
-
-def _start_xray():
-    if not os.path.exists(XRAY_BIN):
-        return False
-    try:
-        import socket
-        s = socket.create_connection(('127.0.0.1', 1080), timeout=2)
-        s.close()
-        logger.info("xray already running")
-        return True
-    except Exception:
-        pass
-    try:
-        with open(XRAY_CFG, 'w') as f:
-            json.dump(XRAY_VLESS_CONFIG, f)
-        subprocess.Popen(
-            [XRAY_BIN, 'run', '-c', XRAY_CFG],
-            stdout=open('/tmp/xray.log', 'w'),
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        import time
-        time.sleep(2)
-        s = socket.create_connection(('127.0.0.1', 1080), timeout=3)
-        s.close()
-        logger.info("xray started OK on 127.0.0.1:1080")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to start xray: {e}")
-        return False
-
-
-def _init_xray_bg():
-    import threading
-    def _worker():
-        try:
-            _ensure_xray()
-            _start_xray()
-        except Exception as e:
-            logger.error(f"xray init error: {e}")
-    threading.Thread(target=_worker, daemon=True).start()
-
-_init_xray_bg()
-
 user_queues = {}
 user_locks = {}
 pending_yt = {}
@@ -322,21 +246,7 @@ _ig_proxy_cache = None
 _ig_proxy_ts = 0
 
 def get_ig_proxy():
-    global _ig_proxy_cache, _ig_proxy_ts
-    now = time.time()
-    if _ig_proxy_cache is not None and now - _ig_proxy_ts < 60:
-        return _ig_proxy_cache
-    _ig_proxy_ts = now
-    raw = os.environ.get('IG_PROXY', '').strip() or 'socks5://127.0.0.1:1080'
-    try:
-        import socket
-        s = socket.create_connection(('127.0.0.1', 1080), timeout=2)
-        s.close()
-        _ig_proxy_cache = raw
-        return _ig_proxy_cache
-    except Exception:
-        _ig_proxy_cache = None
-        return None
+    return None
 
 
 def make_ydl_opts(fmt=None, quality=None):
@@ -477,11 +387,9 @@ def _ig_get_media_pk(shortcode):
 
 def _ig_api_get(pk):
     cookies = _load_ig_cookies()
-    ig_proxy = get_ig_proxy()
     try:
         from curl_cffi import requests as cf_requests
         cf_cookies = {k: v for k, v in cookies.items()}
-        proxies = f"socks5://127.0.0.1:1080" if ig_proxy and '127.0.0.1:1080' in ig_proxy else (ig_proxy or None)
         r = cf_requests.get(
             f'https://i.instagram.com/api/v1/media/{pk}/info/',
             impersonate="chrome",
@@ -490,18 +398,17 @@ def _ig_api_get(pk):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 'X-IG-App-ID': '936619743392459',
                 'X-CSRFToken': cookies.get('csrftoken', ''),
-                'Accept': '*/*',
-                'Accept-Language': 'en-US,en;q=0.9',
             },
             timeout=15,
-            proxies=proxies,
         )
         if r.status_code == 200:
             items = r.json().get('items', [])
             if items:
                 return items[0]
+    except ImportError:
+        logger.error("curl_cffi not installed! Run: pip install curl_cffi")
     except Exception as e:
-        logger.error(f"Instagram API curl_cffi error: {e}")
+        logger.error(f"Instagram API error: {e}")
     return None
 
 
@@ -539,7 +446,6 @@ def _load_ig_cookies_for_playwright():
 def _download_ig_browser(url, tmp_dir):
     """Download IG post/reel via headless Chrome in a subprocess (kills on timeout)."""
     cookies_file = get_instagram_cookiefile() or ''
-    ig_proxy = get_ig_proxy() or ''
     script = r'''
 import sys, os, json, re, urllib.request
 from playwright.sync_api import sync_playwright
@@ -547,7 +453,6 @@ from playwright.sync_api import sync_playwright
 url = sys.argv[1]
 tmp_dir = sys.argv[2]
 cookies_file = sys.argv[3] if len(sys.argv) > 3 else ''
-ig_proxy = sys.argv[4] if len(sys.argv) > 4 else ''
 os.makedirs(tmp_dir, exist_ok=True)
 
 def load_cookies(pf):
@@ -570,8 +475,6 @@ def load_cookies(pf):
 
 media_captured = {}
 
-proxy_cfg = {"server": ig_proxy} if ig_proxy else None
-
 with sync_playwright() as p:
     browser = p.chromium.launch(headless=True, args=[
         '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
@@ -580,7 +483,6 @@ with sync_playwright() as p:
     ctx = browser.new_context(
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         viewport={'width': 1920, 'height': 1080}, locale='en-US',
-        proxy=proxy_cfg,
     )
     ctx.set_default_timeout(8000)
     ctx.set_default_navigation_timeout(12000)
@@ -680,7 +582,7 @@ print(json.dumps({'photos': downloaded, 'caption': ''}))
 '''
     try:
         result = subprocess.run(
-            [sys.executable, '-c', script, url, tmp_dir, cookies_file, ig_proxy],
+            [sys.executable, '-c', script, url, tmp_dir, cookies_file],
             capture_output=True, text=True, timeout=30,
             env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'}
         )
@@ -699,12 +601,9 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     """Run gallery-dl and return downloaded files."""
     if not cookies_file:
         cookies_file = get_instagram_cookiefile()
-    ig_proxy = get_ig_proxy()
     cmd = [sys.executable, '-m', 'gallery_dl']
     if cookies_file:
         cmd += ['--cookies', cookies_file]
-    if ig_proxy:
-        cmd += ['--proxy', ig_proxy]
     cmd += ['-d', tmp_dir, url]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
     if result.returncode:
@@ -742,8 +641,6 @@ def download_ig_post(url):
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"ig_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
     cookies_file = get_instagram_cookiefile()
-    ig_proxy = get_ig_proxy()
-    _ig_prx = {'http': ig_proxy, 'https': ig_proxy} if ig_proxy else None
 
     # Stories — IG API first, instaloader fallback
     story_match = re.search(r'instagram\.com/stories/[^/]+/(\d+)', url)
@@ -787,15 +684,12 @@ def download_ig_post(url):
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
 
             def _il_story():
-                ig_proxy = get_ig_proxy()
                 loader = _il.Instaloader(
                     quiet=True, download_pictures=False, download_videos=False,
                     download_video_thumbnails=False, download_geotags=False,
                     download_comments=False, save_metadata=False, compress_json=False,
                     request_timeout=25,
                 )
-                if ig_proxy:
-                    loader.context._session.proxies = {'http': ig_proxy, 'https': ig_proxy}
                 user_match = re.search(r'instagram\.com/stories/([^/]+)/', url)
                 if user_match:
                     username = user_match.group(1)
@@ -856,8 +750,6 @@ def download_ig_post(url):
                     download_comments=False, save_metadata=False, compress_json=False,
                     request_timeout=25,
                 )
-                if ig_proxy:
-                    loader.context._session.proxies = {'http': ig_proxy, 'https': ig_proxy}
                 sc_match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?]+)', url)
                 if not sc_match:
                     return [], ''
@@ -941,8 +833,6 @@ def download_ig_post(url):
             ydl_opts['format'] = 'best[ext=mp4]/best'
             if cookies_file:
                 ydl_opts['cookiefile'] = cookies_file
-            if ig_proxy:
-                ydl_opts['proxy'] = ig_proxy
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if info:
