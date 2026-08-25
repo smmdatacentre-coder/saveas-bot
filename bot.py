@@ -11,6 +11,7 @@ import sys
 import logging
 import asyncio
 import shutil
+import threading
 import requests
 import yt_dlp
 
@@ -42,11 +43,80 @@ os.environ['PATH'] = BOT_DIR + ':' + os.environ.get('PATH', '')
 ADMIN_ID = 256869382
 ERROR_SUFFIX = "\n\n📞 Сообщите об ошибке @d8shot_manager_bot и приложите скрин — пофиксим в ближайшее время!"
 
+XRAY_BIN = '/tmp/xray'
+XRAY_CFG = '/tmp/xray.json'
+XRAY_REPO_BIN = os.path.join(BOT_DIR, 'xray_linux64')
+XRAY_VLESS_CONFIG = {
+    "log": {"loglevel": "warning"},
+    "inbounds": [{"port": 1080, "listen": "127.0.0.1", "protocol": "socks", "settings": {"udp": True}}],
+    "outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "222.167.217.182", "port": 8443, "users": [{"id": "1be3a16d-9e39-451d-bc13-5b99e723c8af", "encryption": "none"}]}]}, "streamSettings": {"network": "xhttp", "security": "reality", "realitySettings": {"serverName": "stackoverflow.com", "fingerprint": "firefox", "publicKey": "Dkhc0OnlL2ATHD5rhSZ8YBpQ3R5gKKlaNReaI8KW0Ug", "shortId": "", "spiderX": "/"}}}]
+}
+
 user_queues = {}
 user_locks = {}
 pending_yt = {}
 pending_vk = {}
 queue_workers = {}
+
+
+def _start_xray():
+    import socket as _sock
+    if os.path.exists(XRAY_BIN):
+        try:
+            s = _sock.create_connection(('127.0.0.1', 1080), timeout=1)
+            s.close()
+            return True
+        except Exception:
+            pass
+        try:
+            with open(XRAY_CFG, 'w') as f:
+                json.dump(XRAY_VLESS_CONFIG, f)
+            subprocess.Popen(
+                [XRAY_BIN, 'run', '-c', XRAY_CFG],
+                stdout=open('/tmp/xray.log', 'w'),
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            time.sleep(2)
+            s = _sock.create_connection(('127.0.0.1', 1080), timeout=2)
+            s.close()
+            logger.info("xray started OK")
+            return True
+        except Exception as e:
+            logger.error(f"xray start failed: {e}")
+    return False
+
+
+def _init_xray():
+    if os.path.exists(XRAY_BIN):
+        _start_xray()
+        return
+    if os.path.exists(XRAY_REPO_BIN):
+        try:
+            shutil.copy2(XRAY_REPO_BIN, XRAY_BIN)
+            os.chmod(XRAY_BIN, 0o755)
+            _start_xray()
+        except Exception as e:
+            logger.error(f"xray copy failed: {e}")
+
+
+def _ig_has_proxy():
+    import socket as _sock
+    try:
+        s = _sock.create_connection(('127.0.0.1', 1080), timeout=1)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def _ig_proxies():
+    if _ig_has_proxy():
+        return 'socks5://127.0.0.1:1080'
+    return None
+
+
+threading.Thread(target=_init_xray, daemon=True).start()
 
 
 def get_ffmpeg_path():
@@ -254,13 +324,6 @@ def get_youtube_proxy():
     return os.environ.get('YOUTUBE_PROXY', '').strip() or None
 
 
-_ig_proxy_cache = None
-_ig_proxy_ts = 0
-
-def get_ig_proxy():
-    return None
-
-
 def make_ydl_opts(fmt=None, quality=None):
     base = {
         'outtmpl': f'{DOWNLOAD_DIR}/%(id)s.%(ext)s',
@@ -405,16 +468,19 @@ def _ig_api_get(pk):
         'X-IG-App-ID': '936619743392459',
         'X-CSRFToken': cookies.get('csrftoken', ''),
     }
+    proxy = _ig_proxies()
     try:
         if HAS_CURL_CFFI:
             r = cf_requests.get(
                 f'https://i.instagram.com/api/v1/media/{pk}/info/',
-                impersonate="chrome", cookies=cf_cookies, headers=headers, timeout=15,
+                impersonate="chrome", cookies=cf_cookies, headers=headers,
+                timeout=8, proxies=proxy,
             )
         else:
             r = requests.get(
                 f'https://i.instagram.com/api/v1/media/{pk}/info/',
-                cookies=cf_cookies, headers=headers, timeout=15,
+                cookies=cf_cookies, headers=headers,
+                timeout=8, proxies=proxy,
             )
         if r.status_code == 200:
             items = r.json().get('items', [])
@@ -614,11 +680,14 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     """Run gallery-dl and return downloaded files."""
     if not cookies_file:
         cookies_file = get_instagram_cookiefile()
+    proxy = _ig_proxies()
     cmd = [sys.executable, '-m', 'gallery_dl']
     if cookies_file:
         cmd += ['--cookies', cookies_file]
+    if proxy:
+        cmd += ['--proxy', proxy]
     cmd += ['-d', tmp_dir, url]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     if result.returncode:
         logger.error(f"Instagram gallery-dl error [{result.returncode}]: {result.stderr[-500:]}")
     photos = []
@@ -636,18 +705,30 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     return photos
 
 
-def _ig_download_bytes(url, timeout=60):
+def _ig_download_bytes(url, timeout=30):
     """Download bytes from IG URL using curl_cffi (bypasses TLS fingerprinting)."""
+    proxy = _ig_proxies()
     try:
         if HAS_CURL_CFFI:
-            r = cf_requests.get(url, impersonate="chrome", timeout=timeout)
+            r = cf_requests.get(url, impersonate="chrome", timeout=timeout, proxies=proxy)
         else:
-            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}, timeout=timeout)
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}, timeout=timeout, proxies=proxy)
         if r.status_code == 200:
             return r.content
     except Exception as e:
         logger.error(f"IG download error: {e}")
     return None
+
+
+def _download_ig_post_timeout(url, total_timeout=40):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FTE
+    with ThreadPoolExecutor(1) as pool:
+        future = pool.submit(download_ig_post, url)
+        try:
+            return future.result(timeout=total_timeout)
+        except _FTE:
+            logger.error(f"Instagram download timed out after {total_timeout}s")
+            return [], '', ''
 
 
 def download_ig_post(url):
@@ -732,7 +813,7 @@ def download_ig_post(url):
                 return None
 
             with ThreadPoolExecutor(1) as pool:
-                result = pool.submit(_il_story).result(timeout=25)
+                result = pool.submit(_il_story).result(timeout=10)
                 if result:
                     return [result], '', tmp_dir
         except _FutTimeout:
@@ -744,7 +825,7 @@ def download_ig_post(url):
         try:
             from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _FutTimeoutS
             with _TPE(1) as pool:
-                b_photos, _ = pool.submit(_download_ig_browser, url, tmp_dir).result(timeout=45)
+                b_photos, _ = pool.submit(_download_ig_browser, url, tmp_dir).result(timeout=12)
                 if b_photos:
                     return b_photos, '', tmp_dir
         except _FutTimeoutS:
@@ -808,7 +889,7 @@ def download_ig_post(url):
                 return result_photos, cap
 
             with ThreadPoolExecutor(1) as pool:
-                r_photos, r_caption = pool.submit(_il_post).result(timeout=25)
+                r_photos, r_caption = pool.submit(_il_post).result(timeout=10)
                 photos = r_photos
                 if r_caption:
                     caption = r_caption
@@ -826,7 +907,7 @@ def download_ig_post(url):
                 return _download_ig_browser(url, tmp_dir)
 
             with ThreadPoolExecutor(1) as pool:
-                b_photos, b_caption = pool.submit(_browser_dl).result(timeout=35)
+                b_photos, b_caption = pool.submit(_browser_dl).result(timeout=12)
                 if b_photos:
                     photos = b_photos
                     if b_caption:
@@ -2426,7 +2507,7 @@ async def process_queue(chat_id, bot, loop):
                     await update_status(build_queue_text(queue))
 
                     photos, caption, ig_tmp_dir = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: download_ig_post(task.url)
+                        None, lambda: _download_ig_post_timeout(task.url, 40)
                     )
 
                     if photos:
