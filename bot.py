@@ -20,12 +20,14 @@ try:
     HAS_CURL_CFFI = True
 except ImportError:
     HAS_CURL_CFFI = False
-    def _install_curl_cffi():
-        try:
-            subprocess.run([sys.executable, '-m', 'pip', 'install', 'curl_cffi', '-q'], timeout=120)
-        except Exception:
-            pass
-    threading.Thread(target=_install_curl_cffi, daemon=True).start()
+    try:
+        logger.info("curl_cffi not found, installing...")
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'curl_cffi', '-q'], timeout=120)
+        from curl_cffi import requests as cf_requests
+        HAS_CURL_CFFI = True
+        logger.info("curl_cffi installed OK")
+    except Exception as e:
+        logger.error(f"curl_cffi install failed: {e}")
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
@@ -65,25 +67,34 @@ def _start_xray():
         try:
             s = _sock.create_connection(('127.0.0.1', 1080), timeout=1)
             s.close()
+            logger.info("xray already running on :1080")
             return True
         except Exception:
             pass
         try:
             with open(XRAY_CFG, 'w') as f:
                 json.dump(XRAY_VLESS_CONFIG, f)
+            logger.info(f"Starting xray: {XRAY_BIN}")
             subprocess.Popen(
                 [XRAY_BIN, 'run', '-c', XRAY_CFG],
                 stdout=open('/tmp/xray.log', 'w'),
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-            time.sleep(2)
+            time.sleep(3)
             s = _sock.create_connection(('127.0.0.1', 1080), timeout=2)
             s.close()
-            logger.info("xray started OK")
+            logger.info("xray started OK on :1080")
             return True
         except Exception as e:
             logger.error(f"xray start failed: {e}")
+            try:
+                with open('/tmp/xray.log') as f:
+                    logger.error(f"xray log: {f.read()[-500:]}")
+            except Exception:
+                pass
+    else:
+        logger.error(f"xray binary not found: {XRAY_BIN}")
     return False
 
 
