@@ -123,7 +123,7 @@ def _ig_has_proxy():
 
 def _ig_proxies():
     if _ig_has_proxy():
-        return 'socks5://127.0.0.1:1080'
+        return 'socks5h://127.0.0.1:1080'
     return None
 
 
@@ -501,9 +501,15 @@ def _ig_api_get(pk):
                 timeout=8, proxies=proxy,
             )
         if r.status_code == 200:
-            items = r.json().get('items', [])
-            if items:
-                return items[0]
+            data = r.json()
+            if isinstance(data, dict):
+                items = data.get('items', [])
+                if items:
+                    return items[0]
+            else:
+                logger.error(f"IG API unexpected response type: {type(data)}")
+        else:
+            logger.error(f"IG API status {r.status_code}")
     except Exception as e:
         logger.error(f"Instagram API error: {e}")
     return None
@@ -543,6 +549,7 @@ def _load_ig_cookies_for_playwright():
 def _download_ig_browser(url, tmp_dir):
     """Download IG post/reel via headless Chrome in a subprocess (kills on timeout)."""
     cookies_file = get_instagram_cookiefile() or ''
+    proxy = _ig_proxies() or ''
     script = r'''
 import sys, os, json, re, urllib.request
 from playwright.sync_api import sync_playwright
@@ -550,6 +557,7 @@ from playwright.sync_api import sync_playwright
 url = sys.argv[1]
 tmp_dir = sys.argv[2]
 cookies_file = sys.argv[3] if len(sys.argv) > 3 else ''
+proxy = sys.argv[4] if len(sys.argv) > 4 else ''
 os.makedirs(tmp_dir, exist_ok=True)
 
 def load_cookies(pf):
@@ -573,10 +581,13 @@ def load_cookies(pf):
 media_captured = {}
 
 with sync_playwright() as p:
-    browser = p.chromium.launch(headless=True, args=[
+    launch_args = [
         '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
         '--disable-extensions', '--disable-background-networking',
-    ])
+    ]
+    if proxy:
+        launch_args.append(f'--proxy-server={proxy}')
+    browser = p.chromium.launch(headless=True, args=launch_args)
     ctx = browser.new_context(
         user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         viewport={'width': 1920, 'height': 1080}, locale='en-US',
@@ -679,7 +690,7 @@ print(json.dumps({'photos': downloaded, 'caption': ''}))
 '''
     try:
         result = subprocess.run(
-            [sys.executable, '-c', script, url, tmp_dir, cookies_file],
+            [sys.executable, '-c', script, url, tmp_dir, cookies_file, proxy],
             capture_output=True, text=True, timeout=30,
             env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'}
         )
@@ -705,7 +716,7 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     if proxy:
         cmd += ['--proxy', proxy]
     cmd += ['-d', tmp_dir, url]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode:
         logger.error(f"Instagram gallery-dl error [{result.returncode}]: {result.stderr[-500:]}")
     photos = []
@@ -786,38 +797,47 @@ def download_ig_post(url):
             import instaloader as _il
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
 
+            proxy = _ig_proxies()
+
             def _il_story():
-                loader = _il.Instaloader(
-                    quiet=True, download_pictures=False, download_videos=False,
-                    download_video_thumbnails=False, download_geotags=False,
-                    download_comments=False, save_metadata=False, compress_json=False,
-                    request_timeout=25,
-                )
-                user_match = re.search(r'instagram\.com/stories/([^/]+)/', url)
-                if user_match:
-                    username = user_match.group(1)
-                    profile = _il.Profile.from_username(loader.context, username)
-                    stories = loader.get_stories(user_ids=[profile.userid])
-                    for story in stories:
-                        for item in story.get_items():
-                            if str(item.media_id) == pk or str(item.shortcode) == pk:
-                                if item.is_video and item.video_url:
-                                    fp = os.path.join(tmp_dir, 'story.mp4')
-                                    data = _ig_download_bytes(item.video_url)
-                                    if data:
-                                        with open(fp, 'wb') as f:
-                                            f.write(data)
-                                        if os.path.getsize(fp) > 0:
-                                            return fp
-                                elif item.url:
-                                    fp = os.path.join(tmp_dir, 'story.jpg')
-                                    data = _ig_download_bytes(item.url)
-                                    if data:
-                                        with open(fp, 'wb') as f:
-                                            f.write(data)
-                                        if os.path.getsize(fp) > 0:
-                                            return fp
-                return None
+                if proxy:
+                    os.environ['HTTPS_PROXY'] = proxy
+                    os.environ['HTTP_PROXY'] = proxy
+                try:
+                    loader = _il.Instaloader(
+                        quiet=True, download_pictures=False, download_videos=False,
+                        download_video_thumbnails=False, download_geotags=False,
+                        download_comments=False, save_metadata=False, compress_json=False,
+                        request_timeout=25,
+                    )
+                    user_match = re.search(r'instagram\.com/stories/([^/]+)/', url)
+                    if user_match:
+                        username = user_match.group(1)
+                        profile = _il.Profile.from_username(loader.context, username)
+                        stories = loader.get_stories(user_ids=[profile.userid])
+                        for story in stories:
+                            for item in story.get_items():
+                                if str(item.media_id) == pk or str(item.shortcode) == pk:
+                                    if item.is_video and item.video_url:
+                                        fp = os.path.join(tmp_dir, 'story.mp4')
+                                        data = _ig_download_bytes(item.video_url)
+                                        if data:
+                                            with open(fp, 'wb') as f:
+                                                f.write(data)
+                                            if os.path.getsize(fp) > 0:
+                                                return fp
+                                    elif item.url:
+                                        fp = os.path.join(tmp_dir, 'story.jpg')
+                                        data = _ig_download_bytes(item.url)
+                                        if data:
+                                            with open(fp, 'wb') as f:
+                                                f.write(data)
+                                            if os.path.getsize(fp) > 0:
+                                                return fp
+                    return None
+                finally:
+                    os.environ.pop('HTTPS_PROXY', None)
+                    os.environ.pop('HTTP_PROXY', None)
 
             with ThreadPoolExecutor(1) as pool:
                 result = pool.submit(_il_story).result(timeout=10)
@@ -847,53 +867,61 @@ def download_ig_post(url):
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout2
 
             def _il_post():
-                loader = _il.Instaloader(
-                    quiet=True, download_pictures=False, download_videos=False,
-                    download_video_thumbnails=False, download_geotags=False,
-                    download_comments=False, save_metadata=False, compress_json=False,
-                    request_timeout=25,
-                )
-                sc_match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?]+)', url)
-                if not sc_match:
-                    return [], ''
-                shortcode = sc_match.group(1)
-                post = _il.Post.from_shortcode(loader.context, shortcode)
-                result_photos = []
-                cap = post.caption or ''
-                if post.is_video and post.video_url:
-                    fp = os.path.join(tmp_dir, f"{post.shortcode}.mp4")
-                    data = _ig_download_bytes(post.video_url)
-                    if data:
-                        with open(fp, 'wb') as f:
-                            f.write(data)
-                        if os.path.getsize(fp) > 0:
-                            result_photos.append(fp)
-                elif post.url:
-                    fp = os.path.join(tmp_dir, f"{post.shortcode}.jpg")
-                    data = _ig_download_bytes(post.url)
-                    if data:
-                        with open(fp, 'wb') as f:
-                            f.write(data)
-                        if os.path.getsize(fp) > 0:
-                            result_photos.append(fp)
-                if not result_photos and post.typename == 'GraphSidecar':
-                    for i, node in enumerate(post.get_sidecar_nodes()):
-                        if node.is_video and node.video_url:
-                            ext = 'mp4'
-                            dl_url = node.video_url
-                        elif node.display_url:
-                            ext = 'jpg'
-                            dl_url = node.display_url
-                        else:
-                            continue
-                        fp = os.path.join(tmp_dir, f"{i}.{ext}")
-                        data = _ig_download_bytes(dl_url)
+                proxy = _ig_proxies()
+                if proxy:
+                    os.environ['HTTPS_PROXY'] = proxy
+                    os.environ['HTTP_PROXY'] = proxy
+                try:
+                    loader = _il.Instaloader(
+                        quiet=True, download_pictures=False, download_videos=False,
+                        download_video_thumbnails=False, download_geotags=False,
+                        download_comments=False, save_metadata=False, compress_json=False,
+                        request_timeout=25,
+                    )
+                    sc_match = re.search(r'instagram\.com/(?:p|reel|tv)/([^/?]+)', url)
+                    if not sc_match:
+                        return [], ''
+                    shortcode = sc_match.group(1)
+                    post = _il.Post.from_shortcode(loader.context, shortcode)
+                    result_photos = []
+                    cap = post.caption or ''
+                    if post.is_video and post.video_url:
+                        fp = os.path.join(tmp_dir, f"{post.shortcode}.mp4")
+                        data = _ig_download_bytes(post.video_url)
                         if data:
                             with open(fp, 'wb') as f:
                                 f.write(data)
                             if os.path.getsize(fp) > 0:
                                 result_photos.append(fp)
-                return result_photos, cap
+                    elif post.url:
+                        fp = os.path.join(tmp_dir, f"{post.shortcode}.jpg")
+                        data = _ig_download_bytes(post.url)
+                        if data:
+                            with open(fp, 'wb') as f:
+                                f.write(data)
+                            if os.path.getsize(fp) > 0:
+                                result_photos.append(fp)
+                    if not result_photos and post.typename == 'GraphSidecar':
+                        for i, node in enumerate(post.get_sidecar_nodes()):
+                            if node.is_video and node.video_url:
+                                ext = 'mp4'
+                                dl_url = node.video_url
+                            elif node.display_url:
+                                ext = 'jpg'
+                                dl_url = node.display_url
+                            else:
+                                continue
+                            fp = os.path.join(tmp_dir, f"{i}.{ext}")
+                            data = _ig_download_bytes(dl_url)
+                            if data:
+                                with open(fp, 'wb') as f:
+                                    f.write(data)
+                                if os.path.getsize(fp) > 0:
+                                    result_photos.append(fp)
+                    return result_photos, cap
+                finally:
+                    os.environ.pop('HTTPS_PROXY', None)
+                    os.environ.pop('HTTP_PROXY', None)
 
             with ThreadPoolExecutor(1) as pool:
                 r_photos, r_caption = pool.submit(_il_post).result(timeout=10)
