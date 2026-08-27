@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 """
 Instagram Cookie Extractor (SAFE)
-Читает куки из уже залогиненного Chrome/Safari — НОВЫЙ ВХОД НЕ НУЖЕН.
+Читает куки из залогиненного Chrome/Safari и отправляет боту в Telegram.
 
 Использование:
   1. Убедись что залогинен в Instagram в Chrome
   2. Запусти: python3 get_ig_cookies.py
-  3. Cookies сохранятся и запушатся в GitHub
+  3. Куки уйдут боту в Telegram автоматически
 
 Риск бана: НЕТ — скрипт только ЧИТАЕТ существующую сессию.
 """
-import subprocess
 import sys
 import os
 import base64
+import urllib.request
+import urllib.parse
 
+BOT_TOKEN = "8868939755:AAFG6wtLjShyVSLmmbaD650kbNd2Zq3zcjg"
+ADMIN_ID = 256869382
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 COOKIES_FILE = os.path.join(REPO_DIR, 'cookies.txt')
 
@@ -23,7 +26,7 @@ def get_chrome_cookies():
     try:
         import browser_cookie3
     except ImportError:
-        print("Установи browser_cookie3: pip3 install browser_cookie3")
+        print("Установи: pip3 install browser_cookie3")
         sys.exit(1)
 
     cookies = []
@@ -42,7 +45,6 @@ def get_chrome_cookies():
                 })
         except Exception:
             continue
-
     return cookies
 
 
@@ -60,26 +62,42 @@ def cookies_to_netscape(cookies):
     return '\n'.join(lines) + '\n'
 
 
-def push_to_github():
-    try:
-        subprocess.run(['git', 'add', 'cookies.txt', 'cookies_b64.txt'], cwd=REPO_DIR, check=False)
-        result = subprocess.run(['git', 'diff', '--cached', '--quiet', 'cookies.txt'], cwd=REPO_DIR)
-        if result.returncode == 0:
-            print("cookies.txt не изменился, пропускаю push.")
+def send_to_bot(content):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
+
+    import io
+    data = io.BytesIO(content.encode('utf-8'))
+    data.name = 'cookies.txt'
+
+    boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
+    body = (
+        f'--{boundary}\r\n'
+        f'Content-Disposition: form-data; name="chat_id"\r\n\r\n'
+        f'{ADMIN_ID}\r\n'
+        f'--{boundary}\r\n'
+        f'Content-Disposition: form-data; name="document"; filename="cookies.txt"\r\n'
+        f'Content-Type: text/plain\r\n\r\n'
+        f'{content}\r\n'
+        f'--{boundary}--\r\n'
+    ).encode('utf-8')
+
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        result = resp.read().decode()
+        if '"ok":true' in result:
             return True
-        subprocess.run(['git', 'commit', '-m', 'chore: update IG cookies'], cwd=REPO_DIR, check=True)
-        subprocess.run(['git', 'push'], cwd=REPO_DIR, check=True)
-        print("Cookies запушены в GitHub!")
-        return True
-    except Exception as e:
-        print(f"Git push failed: {e}")
-        return False
+        else:
+            print(f"Telegram error: {result}")
+            return False
 
 
 def main():
     print("=" * 50)
     print("Instagram Cookie Extractor (SAFE)")
-    print("Читает куки из залогиненного Chrome/Safari")
     print("=" * 50)
 
     cookies = get_chrome_cookies()
@@ -92,20 +110,19 @@ def main():
     print(f"\n✅ Найдено {len(cookies)} Instagram cookies")
 
     netscape = cookies_to_netscape(cookies)
+
     with open(COOKIES_FILE, 'w') as f:
         f.write(netscape)
-    print(f"Сохранено: {COOKIES_FILE}")
 
     b64_file = os.path.join(REPO_DIR, 'cookies_b64.txt')
     with open(b64_file, 'w') as f:
         f.write(base64.b64encode(netscape.encode('utf-8')).decode('ascii'))
-    print(f"Сохранено: {b64_file}")
 
-    push = input("\nЗапушить в GitHub? (y/n): ").strip().lower()
-    if push == 'y':
-        push_to_github()
+    print("Отправляю боту в Telegram...")
+    if send_to_bot(netscape):
+        print("✅ Куки отправлены боту! В боте нажми /updatecookies")
     else:
-        print("Пропускаю push.")
+        print("❌ Ошибка отправки. Попробуй /updatecookies в боте.")
 
 
 if __name__ == '__main__':

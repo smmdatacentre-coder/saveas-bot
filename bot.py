@@ -2868,44 +2868,15 @@ async def main():
             await message.answer("❌ Нет доступа")
             return
 
-        await message.answer("🔄 Обновляю cookies с GitHub...")
-
-        try:
-            import base64
-            import urllib.request
-            url = 'https://raw.githubusercontent.com/smmdatacentre-coder/saveas-bot/main/cookies.txt'
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                content = resp.read().decode('utf-8', errors='replace')
-
-            if 'sessionid' not in content:
-                await message.answer("❌ cookies.txt с GitHub не содержит sessionid")
-                return
-
-            cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
-            with open(cookiefile, 'w', encoding='utf-8') as f:
-                f.write(content)
-
-            b64_file = os.path.join(BOT_DIR, 'cookies_b64.txt')
-            b64_data = base64.b64encode(content.encode('utf-8')).decode('ascii')
-            with open(b64_file, 'w', encoding='utf-8') as f:
-                f.write(b64_data)
-
-            session_match = re.search(r'sessionid\t([^\t\n]+)', content)
-            ds_match = re.search(r'ds_user_id\t([^\t\n]+)', content)
-            line_count = len([l for l in content.splitlines() if l and not l.startswith('#')])
-
-            msg = (
-                f"✅ <b>IG cookies обновлены!</b>\n\n"
-                f"sessionid: {'есть' if session_match else 'нет'}\n"
-                f"ds_user_id: {ds_match.group(1) if ds_match else '?'}\n"
-                f"Всего кук: {line_count}"
-            )
-            await message.answer(msg, parse_mode=ParseMode.HTML)
-
-        except Exception as e:
-            logger.error(f"Cookie pull error: {e}")
-            await message.answer(f"❌ Ошибка: {str(e)[:200]}")
+        text = (
+            "🔄 <b>Обновление IG cookies</b>\n\n"
+            "1. Залогинен в Instagram в Chrome? ✅\n"
+            "2. Выполни на MacBook:\n\n"
+            "<code>cd ~/saveas-bot && python3 get_ig_cookies.py</code>\n\n"
+            "Куки придут сюда автоматически.\n"
+            "Или загрузи файл cookies.txt в этот чат."
+        )
+        await message.answer(text, parse_mode=ParseMode.HTML)
 
     @dp.message(F.document)
     async def handle_document(message: Message):
