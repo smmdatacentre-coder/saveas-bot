@@ -112,14 +112,38 @@ def _init_xray():
             logger.error(f"xray copy failed: {e}")
 
 
+_proxy_ok_cache = None
+_proxy_ok_ts = 0
+
 def _ig_has_proxy():
+    global _proxy_ok_cache, _proxy_ok_ts
     import socket as _sock
     try:
         s = _sock.create_connection(('127.0.0.1', 1080), timeout=1)
         s.close()
-        return True
     except Exception:
+        _proxy_ok_cache = False
         return False
+
+    now = time.time()
+    if _proxy_ok_cache is not None and now - _proxy_ok_ts < 60:
+        return _proxy_ok_cache
+
+    try:
+        r = requests.get('https://api.ipify.org?format=json',
+                         proxies={'http': 'socks5h://127.0.0.1:1080', 'https': 'socks5h://127.0.0.1:1080'},
+                         timeout=8)
+        if r.status_code == 200:
+            _proxy_ok_cache = True
+            _proxy_ok_ts = now
+            logger.info(f"Proxy confirmed working, exit IP: {r.json().get('ip','?')}")
+            return True
+    except Exception as e:
+        logger.warning(f"Proxy connectivity check failed: {e}")
+
+    _proxy_ok_cache = False
+    _proxy_ok_ts = now
+    return False
 
 
 def _ig_proxies():
@@ -537,32 +561,36 @@ def _ig_api_get(pk):
         'X-IG-App-ID': '936619743392459',
         'X-CSRFToken': cookies.get('csrftoken', ''),
     }
-    proxy = _ig_proxies()
-    try:
+
+    def _req(use_proxy):
+        proxy = _ig_proxies() if use_proxy else None
         if HAS_CURL_CFFI and not proxy:
-            r = cf_requests.get(
+            return cf_requests.get(
                 f'https://i.instagram.com/api/v1/media/{pk}/info/',
-                impersonate="chrome", cookies=cf_cookies, headers=headers,
-                timeout=8,
+                impersonate="chrome", cookies=cf_cookies, headers=headers, timeout=8,
             )
-        else:
-            r = requests.get(
-                f'https://i.instagram.com/api/v1/media/{pk}/info/',
-                cookies=cf_cookies, headers=headers,
-                timeout=8, proxies=proxy,
-            )
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, dict):
-                items = data.get('items', [])
-                if items:
-                    return items[0]
+        return requests.get(
+            f'https://i.instagram.com/api/v1/media/{pk}/info/',
+            cookies=cf_cookies, headers=headers, timeout=8, proxies=proxy,
+        )
+
+    for use_proxy in [False, True]:
+        if use_proxy and not _ig_has_proxy():
+            continue
+        try:
+            r = _req(use_proxy)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict):
+                    items = data.get('items', [])
+                    if items:
+                        return items[0]
+                else:
+                    logger.error(f"IG API unexpected response type: {type(data)}")
             else:
-                logger.error(f"IG API unexpected response type: {type(data)}")
-        else:
-            logger.error(f"IG API status {r.status_code}")
-    except Exception as e:
-        logger.error(f"Instagram API error: {e}")
+                logger.error(f"IG API status {r.status_code} (proxy={use_proxy})")
+        except Exception as e:
+            logger.error(f"Instagram API error (proxy={use_proxy}): {e}")
     return None
 
 
@@ -760,14 +788,21 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     """Run gallery-dl and return downloaded files."""
     if not cookies_file:
         cookies_file = get_instagram_cookiefile()
-    proxy = _ig_proxy_str()
-    cmd = [sys.executable, '-m', 'gallery_dl']
-    if cookies_file:
-        cmd += ['--cookies', cookies_file]
-    if proxy:
-        cmd += ['--proxy', proxy]
-    cmd += ['-d', tmp_dir, url]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+    def _run_gdl(use_proxy):
+        cmd = [sys.executable, '-m', 'gallery_dl']
+        if cookies_file:
+            cmd += ['--cookies', cookies_file]
+        if use_proxy and _ig_has_proxy():
+            cmd += ['--proxy', _ig_proxy_str()]
+        cmd += ['-d', tmp_dir, url]
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+    result = _run_gdl(False)
+    if result.returncode:
+        logger.warning(f"gallery-dl direct failed, trying proxy: {result.stderr[-300:]}")
+        if _ig_has_proxy():
+            result = _run_gdl(True)
     if result.returncode:
         logger.error(f"Instagram gallery-dl error [{result.returncode}]: {result.stderr[-500:]}")
     photos = []
@@ -791,12 +826,21 @@ def _ig_download_bytes(url, timeout=30):
     try:
         if HAS_CURL_CFFI and not proxy:
             r = cf_requests.get(url, impersonate="chrome", timeout=timeout)
+            if r.status_code == 200:
+                return r.content
         else:
             r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}, timeout=timeout, proxies=proxy)
-        if r.status_code == 200:
-            return r.content
+            if r.status_code == 200:
+                return r.content
     except Exception as e:
-        logger.error(f"IG download error: {e}")
+        logger.error(f"IG download error (proxy={bool(proxy)}): {e}")
+    if proxy:
+        try:
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, timeout=timeout)
+            if r.status_code == 200:
+                return r.content
+        except Exception as e:
+            logger.error(f"IG download direct fallback error: {e}")
     return None
 
 
