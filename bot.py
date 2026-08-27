@@ -85,6 +85,7 @@ def _start_xray():
             s = _sock.create_connection(('127.0.0.1', 1080), timeout=2)
             s.close()
             logger.info("xray started OK on :1080")
+            threading.Thread(target=_check_proxy_exit_ip, daemon=True).start()
             return True
         except Exception as e:
             logger.error(f"xray start failed: {e}")
@@ -123,11 +124,27 @@ def _ig_has_proxy():
 
 def _ig_proxies():
     if _ig_has_proxy():
+        return {'http': 'socks5h://127.0.0.1:1080', 'https': 'socks5h://127.0.0.1:1080'}
+    return None
+
+def _ig_proxy_str():
+    if _ig_has_proxy():
         return 'socks5h://127.0.0.1:1080'
     return None
 
 
 _xray_started = False
+
+def _check_proxy_exit_ip():
+    try:
+        r = requests.get('https://api.ipify.org?format=json', proxies=_ig_proxies(), timeout=10)
+        if r.status_code == 200:
+            ip = r.json().get('query', r.json().get('ip', 'unknown'))
+            logger.info(f"Proxy exit IP: {ip}")
+            return ip
+    except Exception as e:
+        logger.error(f"Proxy exit IP check failed: {e}")
+    return None
 
 def _ensure_xray_once():
     global _xray_started
@@ -488,11 +505,11 @@ def _ig_api_get(pk):
     }
     proxy = _ig_proxies()
     try:
-        if HAS_CURL_CFFI:
+        if HAS_CURL_CFFI and not proxy:
             r = cf_requests.get(
                 f'https://i.instagram.com/api/v1/media/{pk}/info/',
                 impersonate="chrome", cookies=cf_cookies, headers=headers,
-                timeout=8, proxies=proxy,
+                timeout=8,
             )
         else:
             r = requests.get(
@@ -549,7 +566,7 @@ def _load_ig_cookies_for_playwright():
 def _download_ig_browser(url, tmp_dir):
     """Download IG post/reel via headless Chrome in a subprocess (kills on timeout)."""
     cookies_file = get_instagram_cookiefile() or ''
-    proxy = _ig_proxies() or ''
+    proxy = _ig_proxy_str() or ''
     script = r'''
 import sys, os, json, re, urllib.request
 from playwright.sync_api import sync_playwright
@@ -709,7 +726,7 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
     """Run gallery-dl and return downloaded files."""
     if not cookies_file:
         cookies_file = get_instagram_cookiefile()
-    proxy = _ig_proxies()
+    proxy = _ig_proxy_str()
     cmd = [sys.executable, '-m', 'gallery_dl']
     if cookies_file:
         cmd += ['--cookies', cookies_file]
@@ -738,8 +755,8 @@ def _ig_download_bytes(url, timeout=30):
     """Download bytes from IG URL using curl_cffi (bypasses TLS fingerprinting)."""
     proxy = _ig_proxies()
     try:
-        if HAS_CURL_CFFI:
-            r = cf_requests.get(url, impersonate="chrome", timeout=timeout, proxies=proxy)
+        if HAS_CURL_CFFI and not proxy:
+            r = cf_requests.get(url, impersonate="chrome", timeout=timeout)
         else:
             r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}, timeout=timeout, proxies=proxy)
         if r.status_code == 200:
@@ -797,12 +814,12 @@ def download_ig_post(url):
             import instaloader as _il
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout
 
-            proxy = _ig_proxies()
+            proxy_str = _ig_proxy_str()
 
             def _il_story():
-                if proxy:
-                    os.environ['HTTPS_PROXY'] = proxy
-                    os.environ['HTTP_PROXY'] = proxy
+                if proxy_str:
+                    os.environ['HTTPS_PROXY'] = proxy_str
+                    os.environ['HTTP_PROXY'] = proxy_str
                 try:
                     loader = _il.Instaloader(
                         quiet=True, download_pictures=False, download_videos=False,
@@ -867,10 +884,10 @@ def download_ig_post(url):
             from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout2
 
             def _il_post():
-                proxy = _ig_proxies()
-                if proxy:
-                    os.environ['HTTPS_PROXY'] = proxy
-                    os.environ['HTTP_PROXY'] = proxy
+                proxy_str = _ig_proxy_str()
+                if proxy_str:
+                    os.environ['HTTPS_PROXY'] = proxy_str
+                    os.environ['HTTP_PROXY'] = proxy_str
                 try:
                     loader = _il.Instaloader(
                         quiet=True, download_pictures=False, download_videos=False,
