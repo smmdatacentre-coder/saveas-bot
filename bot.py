@@ -139,11 +139,18 @@ def _check_proxy_exit_ip():
     try:
         r = requests.get('https://api.ipify.org?format=json', proxies=_ig_proxies(), timeout=10)
         if r.status_code == 200:
-            ip = r.json().get('query', r.json().get('ip', 'unknown'))
+            data = r.json()
+            ip = data.get('query', data.get('ip', 'unknown'))
             logger.info(f"Proxy exit IP: {ip}")
             return ip
     except Exception as e:
         logger.error(f"Proxy exit IP check failed: {e}")
+    try:
+        with open('/tmp/xray.log') as f:
+            log_content = f.read()[-1000:]
+            logger.error(f"xray log tail: {log_content}")
+    except Exception:
+        pass
     return None
 
 def _ensure_xray_once():
