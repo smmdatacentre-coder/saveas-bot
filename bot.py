@@ -153,6 +153,33 @@ def _check_proxy_exit_ip():
         pass
     return None
 
+def _auto_pull_cookies():
+    try:
+        import base64
+        import urllib.request
+        cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
+        if os.path.exists(cookiefile) and os.path.getsize(cookiefile) > 50:
+            with open(cookiefile) as f:
+                if 'sessionid' in f.read():
+                    logger.info("Cookies already present, skipping pull")
+                    return
+        logger.info("Pulling fresh cookies from GitHub...")
+        url = 'https://raw.githubusercontent.com/smmdatacentre-coder/saveas-bot/main/cookies.txt'
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            content = resp.read().decode('utf-8', errors='replace')
+        if 'sessionid' in content:
+            with open(cookiefile, 'w') as f:
+                f.write(content)
+            b64_file = os.path.join(BOT_DIR, 'cookies_b64.txt')
+            with open(b64_file, 'w') as f:
+                f.write(base64.b64encode(content.encode('utf-8')).decode('ascii'))
+            logger.info(f"Pulled cookies from GitHub ({len(content)} bytes)")
+        else:
+            logger.warning("GitHub cookies.txt has no sessionid")
+    except Exception as e:
+        logger.error(f"Auto-pull cookies failed: {e}")
+
 def _ensure_xray_once():
     global _xray_started
     if _xray_started:
@@ -2787,6 +2814,7 @@ async def main():
         return
 
     threading.Thread(target=_ensure_xray_once, daemon=True).start()
+    threading.Thread(target=_auto_pull_cookies, daemon=True).start()
 
     user_queues.clear()
     user_locks.clear()
@@ -2840,27 +2868,44 @@ async def main():
             await message.answer("❌ Нет доступа")
             return
 
-        text = (
-            "📋 <b>Обновление IG cookies</b>\n\n"
-            "<b>Safari (Mac):</b>\n"
-            "1. Залогинься в Instagram в Safari\n"
-            "2. Выполни в Терминале:\n\n"
-            "<code>pip3 install browser-cookie3 2>/dev/null; python3 &lt;&lt; 'EOF'\n"
-            "import browser_cookie3\n"
-            "cj = browser_cookie3.safari(domain_name='.instagram.com')\n"
-            "with open('/tmp/cookies.txt', 'w') as f:\n"
-            "    f.write('# Netscape HTTP Cookie File\\n')\n"
-            "    for c in cj:\n"
-            "        d = c.domain if c.domain.startswith('.') else '.' + c.domain\n"
-            "        f.write(d + '\\t' + ('TRUE' if d.startswith('.') else 'FALSE') + '\\t' + c.path + '\\t' + ('TRUE' if c.secure else 'FALSE') + '\\t' + (str(int(c.expires)) if c.expires else '0') + '\\t' + c.name + '\\t' + c.value + '\\n')\n"
-            "print('Done!')\n"
-            "EOF</code>\n\n"
-            "3. Открой файл: <code>open /tmp</code>\n"
-            "4. Загрузи cookies.txt сюда\n\n"
-            "<b>Chrome:</b> установи <a href=\"https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc\">Get cookies.txt LOCALLY</a> → Export на instagram.com\n\n"
-            "⚠️ Файл cookies.txt в формате Netscape"
-        )
-        await message.answer(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        await message.answer("🔄 Обновляю cookies с GitHub...")
+
+        try:
+            import base64
+            import urllib.request
+            url = 'https://raw.githubusercontent.com/smmdatacentre-coder/saveas-bot/main/cookies.txt'
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                content = resp.read().decode('utf-8', errors='replace')
+
+            if 'sessionid' not in content:
+                await message.answer("❌ cookies.txt с GitHub не содержит sessionid")
+                return
+
+            cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
+            with open(cookiefile, 'w', encoding='utf-8') as f:
+                f.write(content)
+
+            b64_file = os.path.join(BOT_DIR, 'cookies_b64.txt')
+            b64_data = base64.b64encode(content.encode('utf-8')).decode('ascii')
+            with open(b64_file, 'w', encoding='utf-8') as f:
+                f.write(b64_data)
+
+            session_match = re.search(r'sessionid\t([^\t\n]+)', content)
+            ds_match = re.search(r'ds_user_id\t([^\t\n]+)', content)
+            line_count = len([l for l in content.splitlines() if l and not l.startswith('#')])
+
+            msg = (
+                f"✅ <b>IG cookies обновлены!</b>\n\n"
+                f"sessionid: {'есть' if session_match else 'нет'}\n"
+                f"ds_user_id: {ds_match.group(1) if ds_match else '?'}\n"
+                f"Всего кук: {line_count}"
+            )
+            await message.answer(msg, parse_mode=ParseMode.HTML)
+
+        except Exception as e:
+            logger.error(f"Cookie pull error: {e}")
+            await message.answer(f"❌ Ошибка: {str(e)[:200]}")
 
     @dp.message(F.document)
     async def handle_document(message: Message):
