@@ -1432,28 +1432,37 @@ GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/b
 
 def _threads_resolve_url(url):
     """Resolve short/share Threads URLs to full permalink."""
-    if '/t/' in url or '/share/' in url:
-        browser_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    if '/t/' not in url and '/share/' not in url:
+        return url
+
+    browser_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+
+    for method in [requests.head, requests.get]:
         try:
-            resp = requests.head(url, allow_redirects=False, timeout=10,
-                                 headers={'User-Agent': browser_ua})
+            resp = method(url, allow_redirects=True, timeout=10,
+                          headers={'User-Agent': browser_ua})
+            if '/post/' in resp.url and '/@' in resp.url:
+                return resp.url
+            for r in resp.history:
+                loc = r.headers.get('location', '')
+                if '/post/' in loc and '/@' in loc:
+                    if loc.startswith('/'):
+                        loc = 'https://www.threads.com' + loc
+                    return loc
+        except:
+            pass
+
+        try:
+            resp = method(url, allow_redirects=False, timeout=10,
+                          headers={'User-Agent': browser_ua})
             loc = resp.headers.get('location', '')
-            if loc and ('/post/' in loc or '/@' in loc):
+            if loc and '/post/' in loc and '/@' in loc:
                 if loc.startswith('/'):
                     loc = 'https://www.threads.com' + loc
                 return loc
         except:
             pass
-        try:
-            resp = requests.get(url, allow_redirects=False, timeout=10,
-                                headers={'User-Agent': browser_ua})
-            loc = resp.headers.get('location', '')
-            if loc and ('/post/' in loc or '/@' in loc):
-                if loc.startswith('/'):
-                    loc = 'https://www.threads.com' + loc
-                return loc
-        except:
-            pass
+
     return url
 
 
