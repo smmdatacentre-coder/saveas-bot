@@ -1431,38 +1431,82 @@ GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/b
 
 
 def _threads_resolve_url(url):
-    """Resolve short/share Threads URLs to full permalink."""
+    """Resolve short/share Threads URLs to full permalink using curl (works on servers)."""
     if '/t/' not in url and '/share/' not in url:
         return url
 
-    browser_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    # Method 1: curl -sI — follows redirects, prints all Location headers
+    try:
+        r = subprocess.run(
+            ['curl', '-sI', '-L', '-m', '10',
+             '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+             url],
+            capture_output=True, text=True, timeout=15
+        )
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                low = line.lower()
+                if low.startswith('location:') or low.startswith('x-location:'):
+                    loc = line.split(':', 1)[1].strip()
+                    if '/post/' in loc and '/@' in loc:
+                        if loc.startswith('/'):
+                            loc = 'https://www.threads.com' + loc
+                        logger.info(f"Threads resolve curl OK: {loc}")
+                        return loc
+            # Also check final URL from curl -sv (stderr has redirect chain)
+            for line in r.stderr.splitlines():
+                if 'Location:' in line or 'location:' in line:
+                    loc = line.split('Location:', 1)[-1].strip() if 'Location:' in line else line.split('location:', 1)[-1].strip()
+                    if '/post/' in loc and '/@' in loc:
+                        if loc.startswith('/'):
+                            loc = 'https://www.threads.com' + loc
+                        logger.info(f"Threads resolve curl stderr OK: {loc}")
+                        return loc
+    except Exception as e:
+        logger.warning(f"Threads resolve curl failed: {e}")
 
+    # Method 2: curl -sI -L with verbose redirect chain (single hop)
+    try:
+        r = subprocess.run(
+            ['curl', '-sI', '-L', '--max-redirs', '5', '-m', '10',
+             '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+             url],
+            capture_output=True, text=True, timeout=15
+        )
+        lines = r.stdout.splitlines()
+        last_loc = ''
+        for line in lines:
+            low = line.lower()
+            if low.startswith('location:') or low.startswith('x-location:'):
+                last_loc = line.split(':', 1)[1].strip()
+        if last_loc and '/post/' in last_loc and '/@' in last_loc:
+            if last_loc.startswith('/'):
+                last_loc = 'https://www.threads.com' + last_loc
+            logger.info(f"Threads resolve curl hop OK: {last_loc}")
+            return last_loc
+    except Exception as e:
+        logger.warning(f"Threads resolve curl hop failed: {e}")
+
+    # Method 3: requests fallback
+    browser_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
     for method in [requests.head, requests.get]:
         try:
             resp = method(url, allow_redirects=True, timeout=10,
                           headers={'User-Agent': browser_ua})
             if '/post/' in resp.url and '/@' in resp.url:
+                logger.info(f"Threads resolve requests OK: {resp.url}")
                 return resp.url
             for r in resp.history:
                 loc = r.headers.get('location', '')
                 if '/post/' in loc and '/@' in loc:
                     if loc.startswith('/'):
                         loc = 'https://www.threads.com' + loc
+                    logger.info(f"Threads resolve requests history OK: {loc}")
                     return loc
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Threads resolve requests {method.__name__} error: {e}")
 
-        try:
-            resp = method(url, allow_redirects=False, timeout=10,
-                          headers={'User-Agent': browser_ua})
-            loc = resp.headers.get('location', '')
-            if loc and '/post/' in loc and '/@' in loc:
-                if loc.startswith('/'):
-                    loc = 'https://www.threads.com' + loc
-                return loc
-        except:
-            pass
-
+    logger.warning(f"Threads resolve FAILED for {url} — returning original")
     return url
 
 
@@ -1725,6 +1769,7 @@ def _threads_api_get(shortcode):
     """Fetch Threads post data via threads.net API with IG cookies."""
     cookies = _load_ig_cookies()
     media_id = _shortcode_to_media_id(shortcode)
+    logger.info(f"Threads API: shortcode={shortcode}, media_id={media_id}")
 
     s = requests.Session()
     for k, v in cookies.items():
@@ -1734,15 +1779,22 @@ def _threads_api_get(shortcode):
 
     for domain in ['www.threads.net', 'www.threads.com']:
         try:
-            r = s.get(f'https://{domain}/api/v1/media/{media_id}/info/', headers={
+            api_url = f'https://{domain}/api/v1/media/{media_id}/info/'
+            r = s.get(api_url, headers={
                 'User-Agent': 'Instagram 275.0.0.27.98 Android',
                 'X-IG-App-ID': '238260118697367',
             }, timeout=10)
+            logger.info(f"Threads API {domain}: status={r.status_code}")
             if r.status_code == 200:
                 data = r.json()
                 items = data.get('items', [])
                 if items:
+                    logger.info(f"Threads API {domain}: got {len(items)} item(s)")
                     return items[0], s
+                else:
+                    logger.warning(f"Threads API {domain}: empty items")
+            else:
+                logger.warning(f"Threads API {domain}: {r.status_code} — {r.text[:200]}")
         except Exception as e:
             logger.warning(f"Threads API {domain} error: {e}")
     return None, None
@@ -1754,17 +1806,61 @@ def download_threads_post(url):
     os.makedirs(tmp_dir, exist_ok=True)
 
     try:
-        url = _threads_resolve_url(url)
+        resolved = _threads_resolve_url(url)
+        logger.info(f"Threads: input={url}, resolved={resolved}")
 
-        sc_match = re.search(r'/post/([A-Za-z0-9_-]+)', url) or re.search(r'/share/([A-Za-z0-9_-]+)', url) or re.search(r'/t/([A-Za-z0-9_-]+)', url)
-        shortcode = sc_match.group(1) if sc_match else None
+        # Extract shortcodes from both resolved and original URLs
+        post_sc = re.search(r'/post/([A-Za-z0-9_-]+)', resolved)
+        share_sc = re.search(r'/share/([A-Za-z0-9_-]+)', url) or re.search(r'/t/([A-Za-z0-9_-]+)', url)
+
+        shortcode = post_sc.group(1) if post_sc else (share_sc.group(1) if share_sc else None)
 
         if not shortcode:
             return {'type': 'error', 'error': 'Не удалось определить пост'}
 
+        logger.info(f"Threads: shortcode={shortcode} (post_sc={post_sc is not None}, share_sc={share_sc is not None})")
+
+        # Try with extracted shortcode first
         item, session = _threads_api_get(shortcode)
 
+        # Fallback: if share shortcode failed and we have a different post shortcode
+        if not item and post_sc and share_sc:
+            alt_sc = post_sc.group(1)
+            if alt_sc != shortcode:
+                logger.info(f"Threads: trying alt shortcode {alt_sc}")
+                item, session = _threads_api_get(alt_sc)
+                if item:
+                    shortcode = alt_sc
+
+        # Fallback: if we used share shortcode and it failed, try resolve again with verbose curl
+        if not item and share_sc:
+            logger.info("Threads: share shortcode failed, retrying resolve with -vvv")
+            try:
+                r = subprocess.run(
+                    ['curl', '-sI', '-L', '-m', '10',
+                     '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                     url],
+                    capture_output=True, text=True, timeout=15
+                )
+                # Parse stderr for redirect chain (curl -sI puts redirects in stderr with -vvv, stdout with -sI)
+                for line in (r.stdout + '\n' + r.stderr).splitlines():
+                    low = line.lower()
+                    if 'location:' in low:
+                        loc = line.split(':', 1)[1].strip()
+                        m = re.search(r'/post/([A-Za-z0-9_-]+)', loc)
+                        if m:
+                            new_sc = m.group(1)
+                            if new_sc != shortcode:
+                                logger.info(f"Threads: found post shortcode in redirect: {new_sc}")
+                                item, session = _threads_api_get(new_sc)
+                                if item:
+                                    shortcode = new_sc
+                                    break
+            except Exception as e:
+                logger.warning(f"Threads retry resolve error: {e}")
+
         if not item:
+            logger.warning(f"Threads: all attempts failed for {url}")
             return {'type': 'error', 'error': 'Threads API: пост не найден или нет доступа'}
 
         media_urls = []
