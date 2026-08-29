@@ -1434,31 +1434,26 @@ def _threads_resolve_url(url):
     """Resolve short/share Threads URLs to full permalink."""
     if '/t/' in url or '/share/' in url:
         browser_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-        for method in [requests.head, requests.get]:
-            try:
-                resp = method(url, allow_redirects=True, timeout=10,
-                              headers={'User-Agent': browser_ua})
-                if resp.url and ('/post/' in resp.url or '/@' in resp.url):
-                    return resp.url
-            except:
-                pass
-        sc = re.search(r'/(share|t)/([A-Za-z0-9_-]+)', url)
-        if sc:
-            try:
-                api_url = f'https://www.threads.com/api/graphql'
-                resp = requests.post(api_url, data={
-                    'variables': json.dumps({'shortcode': sc.group(2)}),
-                    'doc_id': '23996318473300828',
-                }, headers={'User-Agent': GOOGLEBOT_UA}, timeout=10)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    post = data.get('data', {}).get('threading_items', [{}])[0].get('post', {})
-                    username = post.get('user', {}).get('username', '')
-                    code = post.get('code', sc.group(2))
-                    if username:
-                        return f'https://www.threads.com/@{username}/post/{code}'
-            except:
-                pass
+        try:
+            resp = requests.head(url, allow_redirects=False, timeout=10,
+                                 headers={'User-Agent': browser_ua})
+            loc = resp.headers.get('location', '')
+            if loc and ('/post/' in loc or '/@' in loc):
+                if loc.startswith('/'):
+                    loc = 'https://www.threads.com' + loc
+                return loc
+        except:
+            pass
+        try:
+            resp = requests.get(url, allow_redirects=False, timeout=10,
+                                headers={'User-Agent': browser_ua})
+            loc = resp.headers.get('location', '')
+            if loc and ('/post/' in loc or '/@' in loc):
+                if loc.startswith('/'):
+                    loc = 'https://www.threads.com' + loc
+                return loc
+        except:
+            pass
     return url
 
 
