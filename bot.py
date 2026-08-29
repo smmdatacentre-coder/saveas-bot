@@ -1435,26 +1435,39 @@ def _threads_resolve_url(url):
     if '/t/' not in url and '/share/' not in url:
         return url
 
-    # Single-hop: get ONLY the first redirect Location (the post URL)
-    try:
-        r = subprocess.run(
-            ['curl', '-sI', '-m', '10',
-             '-H', 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-             url],
-            capture_output=True, text=True, timeout=15
-        )
-        for line in r.stdout.splitlines():
-            low = line.lower()
-            if low.startswith('location:'):
-                loc = line.split(':', 1)[1].strip()
+    import urllib.request
+    import urllib.error
+
+    for allow_redirects in [False, True]:
+        try:
+            req = urllib.request.Request(url, method='HEAD' if not allow_redirects else 'GET',
+                headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'})
+            resp = urllib.request.urlopen(req, timeout=10)
+            final_url = resp.url
+            if '/post/' in final_url and '/@' in final_url:
+                logger.info(f"Threads resolve OK: {final_url}")
+                return final_url
+            # Check redirect history
+            if hasattr(resp, 'headers'):
+                loc = resp.headers.get('Location', '')
                 if '/post/' in loc and '/@' in loc:
                     if loc.startswith('/'):
                         loc = 'https://www.threads.com' + loc
-                    logger.info(f"Threads resolve OK: {loc}")
+                    logger.info(f"Threads resolve header OK: {loc}")
                     return loc
-    except Exception as e:
-        logger.warning(f"Threads resolve curl failed: {e}")
+        except urllib.error.HTTPError as e:
+            # 301/302 redirects show up here — extract Location
+            if e.code in (301, 302, 307, 308):
+                loc = e.headers.get('Location', '')
+                if '/post/' in loc and '/@' in loc:
+                    if loc.startswith('/'):
+                        loc = 'https://www.threads.com' + loc
+                    logger.info(f"Threads resolve redirect {e.code}: {loc}")
+                    return loc
+        except Exception as e:
+            logger.warning(f"Threads resolve error: {e}")
 
+    logger.warning(f"Threads resolve FAILED for {url}")
     return url
 
 
