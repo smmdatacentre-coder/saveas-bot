@@ -1433,10 +1433,11 @@ GOOGLEBOT_UA = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/b
 def _threads_resolve_url(url):
     """Resolve short/share Threads URLs to full permalink."""
     if '/t/' in url or '/share/' in url:
+        browser_ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
         for method in [requests.head, requests.get]:
             try:
                 resp = method(url, allow_redirects=True, timeout=10,
-                              headers={'User-Agent': GOOGLEBOT_UA})
+                              headers={'User-Agent': browser_ua})
                 if resp.url and ('/post/' in resp.url or '/@' in resp.url):
                     return resp.url
             except:
@@ -1707,51 +1708,58 @@ def _extract_threads_post_data(html, shortcode, username=None):
 
 
 def download_threads_post(url):
-    """Download media from Threads post via Googlebot SSR (no browser needed)."""
+    """Download media from Threads post."""
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
 
+    BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+
     try:
         url = _threads_resolve_url(url)
-        resp = requests.get(url, headers={'User-Agent': GOOGLEBOT_UA}, timeout=20)
+
+        sc_match = re.search(r'/post/([A-Za-z0-9_-]+)', url) or re.search(r'/share/([A-Za-z0-9_-]+)', url) or re.search(r'/t/([A-Za-z0-9_-]+)', url)
+        shortcode = sc_match.group(1) if sc_match else None
+        username_match = re.search(r'/@([^/]+)/post/', url)
+        username = username_match.group(1) if username_match else None
+
+        if not shortcode:
+            return {'type': 'error', 'error': 'Не удалось определить пост'}
+
+        resp = requests.get(url, headers={'User-Agent': BROWSER_UA}, timeout=20, allow_redirects=True)
+
+        if '?error=invalid_post' in resp.url or 'error=invalid_post' in resp.text[:500]:
+            return {'type': 'error', 'error': 'Threads блокирует скачивание с сервера. Открой пост в браузере на телефоне/компьютере и используй /save'}
+
         html = resp.text
 
         og = re.search(r'og:url.*?content="https?://[^/]+/(@[^/]+)/post/([^"&]+)', html)
         if og:
             username = og.group(1)
             shortcode = og.group(2)
-        else:
-            sc_match = re.search(r'/post/([A-Za-z0-9_-]+)', url) or re.search(r'/share/([A-Za-z0-9_-]+)', url) or re.search(r'/t/([A-Za-z0-9_-]+)', url)
-            shortcode = sc_match.group(1) if sc_match else None
-            username_match = re.search(r'/@([^/]+)/post/', url)
-            username = username_match.group(1) if username_match else None
-
-        if not shortcode:
-            return {'type': 'error', 'error': 'Не удалось определить пост'}
 
         data = _extract_threads_post_data(html, shortcode, username)
 
-        if not data:
-            return {'type': 'error', 'error': 'Медиа не найдено в посте (SSR)'}
+        if not data or (not data.get('carousel') and not data.get('video_url') and not data.get('image_url')):
+            return {'type': 'error', 'error': 'Медиа не найдено в посте (Threads SSR недоступен с сервера)'}
 
         media_urls = []
-        if data['carousel']:
+        if data.get('carousel'):
             for mtype, murl in data['carousel']:
                 if murl:
                     media_urls.append((mtype, murl))
-        elif data['video_url']:
+        elif data.get('video_url'):
             media_urls.append(('video', data['video_url']))
-        elif data['image_url']:
+        elif data.get('image_url'):
             media_urls.append(('image', data['image_url']))
 
         if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
-        caption_text = data['caption'] or 'Threads post'
+        caption_text = (data.get('caption') or '') or 'Threads post'
         full_caption = f"{caption_text[:500]}\n\n📎 скачано с @saverdshot_bot"
 
         dl_headers = {
-            'User-Agent': GOOGLEBOT_UA,
+            'User-Agent': BROWSER_UA,
             'Referer': 'https://www.threads.com/',
         }
 
