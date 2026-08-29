@@ -1707,7 +1707,7 @@ def _extract_threads_post_data(html, shortcode, username=None):
     }
 
 
-THREADS shortcode alphabet (same as IG)
+# THREADS shortcode alphabet (same as IG)
 _THREADS_SC_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
 
 def _shortcode_to_media_id(shortcode):
@@ -3033,74 +3033,71 @@ async def main():
 
         status_msg = await message.answer("🔍 Проверяю площадки...")
 
-        results = []
+        def _run_all_checks():
+            results = []
 
-        def _check_yt_dlp(name, url):
-            try:
-                r = subprocess.run(
-                    [sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', url],
-                    capture_output=True, text=True, timeout=20
-                )
-                if r.returncode == 0 and r.stdout.strip():
-                    return 'ok'
-                return f'fail'
-            except:
-                return 'timeout'
+            def _yt(name, url):
+                try:
+                    r = subprocess.run(
+                        [sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', url],
+                        capture_output=True, text=True, timeout=20
+                    )
+                    return 'ok' if r.returncode == 0 and r.stdout.strip() else 'fail'
+                except:
+                    return 'timeout'
 
-        def _check_threads():
-            try:
-                cookies = _load_ig_cookies()
-                sc = 'DcloBHRChwe'
-                ALPH = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
-                mid = 0
-                for c in sc:
-                    mid = mid * 64 + ALPH.index(c)
-                s = requests.Session()
-                for k, v in cookies.items():
-                    s.cookies.set(k, v, domain='.threads.net')
-                r = s.get(f'https://www.threads.net/api/v1/media/{mid}/info/',
-                    headers={'User-Agent': 'Instagram 275.0.0.27.98 Android', 'X-IG-App-ID': '238260118697367'},
-                    timeout=10)
-                if r.status_code == 200 and r.json().get('items'):
-                    return 'ok'
-                return f'fail:{r.status_code}'
-            except Exception as e:
-                return f'error:{str(e)[:40]}'
+            def _ig():
+                try:
+                    cookies = _load_ig_cookies()
+                    r = requests.get('https://i.instagram.com/api/v1/media/shortcode/DcBo9Ptseif/info/',
+                        cookies=cookies, headers={
+                            'User-Agent': 'Instagram 275.0.0.27.98 Android',
+                            'X-IG-App-ID': '936619743392459',
+                        }, timeout=10)
+                    return 'ok' if r.status_code == 200 and 'items' in r.json() else f'fail:{r.status_code}'
+                except Exception as e:
+                    return f'error:{str(e)[:40]}'
 
-        def _check_instagram():
-            try:
-                cookies = _load_ig_cookies()
-                r = requests.get('https://i.instagram.com/api/v1/media/shortcode/DcBo9Ptseif/info/',
-                    cookies=cookies, headers={
-                        'User-Agent': 'Instagram 275.0.0.27.98 Android',
-                        'X-IG-App-ID': '936619743392459',
-                    }, timeout=10)
-                if r.status_code == 200 and 'items' in r.json():
-                    return 'ok'
-                return f'fail:{r.status_code}'
-            except Exception as e:
-                return f'error:{str(e)[:40]}'
+            def _threads():
+                try:
+                    cookies = _load_ig_cookies()
+                    sc = 'DcloBHRChwe'
+                    ALPH = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+                    mid = 0
+                    for c in sc:
+                        mid = mid * 64 + ALPH.index(c)
+                    s = requests.Session()
+                    for k, v in cookies.items():
+                        s.cookies.set(k, v, domain='.threads.net')
+                    r = s.get(f'https://www.threads.net/api/v1/media/{mid}/info/',
+                        headers={'User-Agent': 'Instagram 275.0.0.27.98 Android', 'X-IG-App-ID': '238260118697367'},
+                        timeout=10)
+                    return 'ok' if r.status_code == 200 and r.json().get('items') else f'fail:{r.status_code}'
+                except Exception as e:
+                    return f'error:{str(e)[:40]}'
 
-        checks = [
-            ('YouTube', lambda: _check_yt_dlp('YouTube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')),
-            ('Instagram', _check_instagram),
-            ('TikTok', lambda: _check_yt_dlp('TikTok', 'https://www.tiktok.com/@scout2015/video/6718335390845095173')),
-            ('X/Twitter', lambda: _check_yt_dlp('X', 'https://x.com/elonmusk/status/1857914692641823807')),
-            ('VK', lambda: _check_yt_dlp('VK', 'https://vk.com/video-228228027_456239107')),
-            ('OK.ru', lambda: _check_yt_dlp('OK', 'https://ok.ru/video/3938308749882')),
-            ('Rutube', lambda: _check_yt_dlp('Rutube', 'https://rutube.ru/video/private/8a1328d90df64e7dbf20cf44e1230a13/')),
-            ('Pinterest', lambda: _check_yt_dlp('Pinterest', 'https://www.pinterest.com/pin/123456789/')),
-            ('Threads', _check_threads),
-        ]
+            checks = [
+                ('YouTube', lambda: _yt('YouTube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ')),
+                ('Instagram', _ig),
+                ('TikTok', lambda: _yt('TikTok', 'https://www.tiktok.com/@scout2015/video/6718335390845095173')),
+                ('X/Twitter', lambda: _yt('X', 'https://x.com/elonmusk/status/1857914692641823807')),
+                ('VK', lambda: _yt('VK', 'https://vk.com/video-228228027_456239107')),
+                ('OK.ru', lambda: _yt('OK', 'https://ok.ru/video/3938308749882')),
+                ('Rutube', lambda: _yt('Rutube', 'https://rutube.ru/video/437967')),
+                ('Pinterest', lambda: _yt('Pinterest', 'https://www.pinterest.com/pin/123456789/')),
+                ('Threads', _threads),
+            ]
 
-        for name, check_fn in checks:
-            try:
-                result = check_fn()
-                icon = '✅' if result == 'ok' else '❌'
-                results.append(f"{icon} {name}: {result}")
-            except Exception as e:
-                results.append(f"❌ {name}: error:{str(e)[:30]}")
+            for name, fn in checks:
+                try:
+                    result = fn()
+                    icon = '✅' if result == 'ok' else '❌'
+                    results.append(f"{icon} {name}: {result}")
+                except Exception as e:
+                    results.append(f"❌ {name}: {str(e)[:30]}")
+            return results
 
+        results = await asyncio.get_event_loop().run_in_executor(None, _run_all_checks)
         text = "📊 <b>Health Check</b>\n\n" + "\n".join(results)
         await status_msg.edit_text(text, parse_mode=ParseMode.HTML)
 
@@ -3521,30 +3518,34 @@ async def main():
         while True:
             await asyncio.sleep(7 * 24 * 3600)
             try:
-                results = []
-                checks = [
-                    ('YouTube', lambda: subprocess.run([sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'], capture_output=True, text=True, timeout=20)),
-                    ('TikTok', lambda: subprocess.run([sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', 'https://www.tiktok.com/@scout2015/video/6718335390845095173'], capture_output=True, text=True, timeout=20)),
-                    ('X', lambda: subprocess.run([sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', 'https://x.com/elonmusk/status/1857914692641823807'], capture_output=True, text=True, timeout=20)),
-                    ('VK', lambda: subprocess.run([sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', 'https://vk.com/video-228228027_456239107'], capture_output=True, text=True, timeout=20)),
-                    ('OK.ru', lambda: subprocess.run([sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', 'https://ok.ru/video/3938308749882'], capture_output=True, text=True, timeout=20)),
-                ]
-                for name, fn in checks:
-                    try:
-                        r = fn()
-                        results.append(f"{'✅' if r.returncode == 0 else '❌'} {name}")
-                    except:
-                        results.append(f"❌ {name}")
+                def _run_checks():
+                    results = []
+                    yt_tests = [
+                        ('YouTube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'),
+                        ('TikTok', 'https://www.tiktok.com/@scout2015/video/6718335390845095173'),
+                        ('X', 'https://x.com/elonmusk/status/1857914692641823807'),
+                        ('VK', 'https://vk.com/video-228228027_456239107'),
+                        ('OK.ru', 'https://ok.ru/video/3938308749882'),
+                    ]
+                    for name, url in yt_tests:
+                        try:
+                            r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--no-download', '--print', 'title', url],
+                                capture_output=True, text=True, timeout=20)
+                            results.append(f"{'✅' if r.returncode == 0 else '❌'} {name}")
+                        except:
+                            results.append(f"❌ {name}")
 
-                cookies = _load_ig_cookies()
-                if cookies:
-                    try:
-                        r = requests.get('https://i.instagram.com/api/v1/media/shortcode/DcBo9Ptseif/info/',
-                            cookies=cookies, headers={'User-Agent': 'Instagram 275.0.0.27.98 Android', 'X-IG-App-ID': '936619743392459'}, timeout=10)
-                        results.append(f"{'✅' if r.status_code == 200 else '❌'} Instagram")
-                    except:
-                        results.append("❌ Instagram")
+                    cookies = _load_ig_cookies()
+                    if cookies:
+                        try:
+                            r = requests.get('https://i.instagram.com/api/v1/media/shortcode/DcBo9Ptseif/info/',
+                                cookies=cookies, headers={'User-Agent': 'Instagram 275.0.0.27.98 Android', 'X-IG-App-ID': '936619743392459'}, timeout=10)
+                            results.append(f"{'✅' if r.status_code == 200 else '❌'} Instagram")
+                        except:
+                            results.append("❌ Instagram")
+                    return results
 
+                results = await asyncio.get_event_loop().run_in_executor(None, _run_checks)
                 text = "📊 Еженедельная проверка\n\n" + "\n".join(results)
                 await bot.send_message(chat_id=ADMIN_ID, text=text)
             except Exception as e:
