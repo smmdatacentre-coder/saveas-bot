@@ -1707,66 +1707,100 @@ def _extract_threads_post_data(html, shortcode, username=None):
     }
 
 
+THREADS shortcode alphabet (same as IG)
+_THREADS_SC_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+
+def _shortcode_to_media_id(shortcode):
+    media_id = 0
+    for c in shortcode:
+        media_id = media_id * 64 + _THREADS_SC_ALPHABET.index(c)
+    return media_id
+
+
+def _threads_api_get(shortcode):
+    """Fetch Threads post data via threads.net API with IG cookies."""
+    cookies = _load_ig_cookies()
+    media_id = _shortcode_to_media_id(shortcode)
+
+    s = requests.Session()
+    for k, v in cookies.items():
+        s.cookies.set(k, v, domain='.instagram.com')
+        s.cookies.set(k, v, domain='.threads.net')
+        s.cookies.set(k, v, domain='.threads.com')
+
+    for domain in ['www.threads.net', 'www.threads.com']:
+        try:
+            r = s.get(f'https://{domain}/api/v1/media/{media_id}/info/', headers={
+                'User-Agent': 'Instagram 275.0.0.27.98 Android',
+                'X-IG-App-ID': '238260118697367',
+            }, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                items = data.get('items', [])
+                if items:
+                    return items[0], s
+        except Exception as e:
+            logger.warning(f"Threads API {domain} error: {e}")
+    return None, None
+
+
 def download_threads_post(url):
-    """Download media from Threads post."""
+    """Download media from Threads post via threads.net API."""
     tmp_dir = os.path.join(DOWNLOAD_DIR, f"threads_{uuid.uuid4().hex[:8]}")
     os.makedirs(tmp_dir, exist_ok=True)
-
-    BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
 
     try:
         url = _threads_resolve_url(url)
 
         sc_match = re.search(r'/post/([A-Za-z0-9_-]+)', url) or re.search(r'/share/([A-Za-z0-9_-]+)', url) or re.search(r'/t/([A-Za-z0-9_-]+)', url)
         shortcode = sc_match.group(1) if sc_match else None
-        username_match = re.search(r'/@([^/]+)/post/', url)
-        username = username_match.group(1) if username_match else None
 
         if not shortcode:
             return {'type': 'error', 'error': 'Не удалось определить пост'}
 
-        resp = requests.get(url, headers={'User-Agent': BROWSER_UA}, timeout=20, allow_redirects=True)
+        item, session = _threads_api_get(shortcode)
 
-        if '?error=invalid_post' in resp.url or 'error=invalid_post' in resp.text[:500]:
-            return {'type': 'error', 'error': 'Threads блокирует скачивание с сервера. Открой пост в браузере на телефоне/компьютере и используй /save'}
-
-        html = resp.text
-
-        og = re.search(r'og:url.*?content="https?://[^/]+/(@[^/]+)/post/([^"&]+)', html)
-        if og:
-            username = og.group(1)
-            shortcode = og.group(2)
-
-        data = _extract_threads_post_data(html, shortcode, username)
-
-        if not data or (not data.get('carousel') and not data.get('video_url') and not data.get('image_url')):
-            return {'type': 'error', 'error': 'Медиа не найдено в посте (Threads SSR недоступен с сервера)'}
+        if not item:
+            return {'type': 'error', 'error': 'Threads API: пост не найден или нет доступа'}
 
         media_urls = []
-        if data.get('carousel'):
-            for mtype, murl in data['carousel']:
-                if murl:
-                    media_urls.append((mtype, murl))
-        elif data.get('video_url'):
-            media_urls.append(('video', data['video_url']))
-        elif data.get('image_url'):
-            media_urls.append(('image', data['image_url']))
+
+        if item.get('carousel_media'):
+            for cm in item['carousel_media']:
+                if cm.get('video_versions'):
+                    best = max(cm['video_versions'], key=lambda x: x.get('type', 0))
+                    media_urls.append(('video', best['url']))
+                elif cm.get('image_versions2'):
+                    cands = cm['image_versions2'].get('candidates', [])
+                    if cands:
+                        best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                        media_urls.append(('image', best['url']))
+
+        if not media_urls:
+            if item.get('video_versions'):
+                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                media_urls.append(('video', best['url']))
+            elif item.get('image_versions2'):
+                cands = item['image_versions2'].get('candidates', [])
+                if cands:
+                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                    media_urls.append(('image', best['url']))
 
         if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
-        caption_text = (data.get('caption') or '') or 'Threads post'
-        full_caption = f"{caption_text[:500]}\n\n📎 скачано с @saverdshot_bot"
+        caption_text = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
+        full_caption = f"{caption_text[:500]}\n\n📎 скачано с @saverdshot_bot" if caption_text else 'Threads post'
 
         dl_headers = {
-            'User-Agent': BROWSER_UA,
-            'Referer': 'https://www.threads.com/',
+            'User-Agent': 'Instagram 275.0.0.27.98 Android',
+            'Referer': 'https://www.threads.net/',
         }
 
         files = []
         for i, (mtype, murl) in enumerate(media_urls[:10]):
             try:
-                dr = requests.get(murl, headers=dl_headers, timeout=60, stream=True)
+                dr = session.get(murl, headers=dl_headers, timeout=60, stream=True)
                 if dr.status_code == 200:
                     ext = 'mp4' if mtype == 'video' else 'jpg'
                     filepath = os.path.join(tmp_dir, f'media_{i}.{ext}')
@@ -1774,13 +1808,12 @@ def download_threads_post(url):
                         for chunk in dr.iter_content(chunk_size=65536):
                             f.write(chunk)
                     if os.path.getsize(filepath) > 0:
-                        if ext == 'jpg':
-                            with open(filepath, 'rb') as f:
-                                header = f.read(12)
-                            if b'ftyp' in header:
-                                new_path = filepath.replace('.jpg', '.mp4')
-                                os.rename(filepath, new_path)
-                                filepath = new_path
+                        with open(filepath, 'rb') as f:
+                            header = f.read(12)
+                        if ext == 'jpg' and b'ftyp' in header:
+                            new_path = filepath.replace('.jpg', '.mp4')
+                            os.rename(filepath, new_path)
+                            filepath = new_path
                         files.append(filepath)
             except Exception as e:
                 logger.error(f"Threads media download [{i}]: {e}")
