@@ -1726,7 +1726,7 @@ def _threads_api_get(shortcode):
     """Fetch Threads post data via threads.net API with IG cookies."""
     cookies = _load_ig_cookies()
     media_id = _shortcode_to_media_id(shortcode)
-    logger.info(f"Threads API: shortcode={shortcode}, media_id={media_id}")
+    logger.info(f"Threads API: shortcode={shortcode}, media_id={media_id}, cookies_loaded={len(cookies)}, keys={list(cookies.keys())}")
 
     s = requests.Session()
     for k, v in cookies.items():
@@ -1763,6 +1763,7 @@ def download_threads_post(url):
     os.makedirs(tmp_dir, exist_ok=True)
 
     try:
+        url = url.rstrip('\\')
         resolved = _threads_resolve_url(url)
         logger.info(f"Threads: input={url}, resolved={resolved}")
 
