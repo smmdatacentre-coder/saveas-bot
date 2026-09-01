@@ -2,8 +2,8 @@
 """
 python3 get_ig_cookies.py
 
-Читает IG куки из браузера, сохраняет cookies.txt, открывает папку.
-Перетаскиваешь cookies.txt боту в чат.
+Читает IG куки из браузера, сохраняет cookies.txt, коммитит в git.
+Бот подтянет куки автоматически при следующем рестарте.
 """
 import sys
 import os
@@ -41,5 +41,20 @@ with open(OUT, "w") as f:
         f.write(f"{d}\t{'TRUE' if d.startswith('.') else 'FALSE'}\t{c.path}\t{'TRUE' if c.secure else 'FALSE'}\t{str(int(c.expires)) if c.expires else '0'}\t{c.name}\t{c.value}\n")
 
 print(f"cookies.txt готов ({len(cookies)} кук)")
-subprocess.Popen(["open", DIR])
-print("Перетащи cookies.txt боту в чат")
+
+# Auto-commit and push to GitHub
+try:
+    subprocess.run(["git", "add", "cookies.txt"], cwd=DIR, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "update: IG cookies"], cwd=DIR, check=True, capture_output=True)
+    subprocess.run(["git", "push"], cwd=DIR, check=True, capture_output=True, timeout=30)
+    print("✅ Закоммичено и запушено в GitHub!")
+    print("Бот подтянет куки при следующем рестарте.")
+except subprocess.CalledProcessError as e:
+    if b"nothing to commit" in (e.stderr or b"") or b"nothing to commit" in (e.stdout or b""):
+        print("⚠️ Куки уже актуальны, коммитить нечего.")
+    else:
+        print(f"⚠️ Git ошибка: {e.stderr.decode(errors='replace')[:200]}")
+        print("Куки сохранены локально. Отправь cookies.txt боту в чат.")
+except Exception as e:
+    print(f"⚠️ Ошибка: {e}")
+    print("Куки сохранены локально. Отправь cookies.txt боту в чат.")
