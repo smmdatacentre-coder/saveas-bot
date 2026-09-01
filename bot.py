@@ -1435,37 +1435,33 @@ def _threads_resolve_url(url):
     if '/t/' not in url and '/share/' not in url:
         return url
 
-    import urllib.request
-    import urllib.error
+    # requests.head with allow_redirects=False — catches the 302 before it goes to ?error=invalid_post
+    try:
+        resp = requests.head(url, allow_redirects=False, timeout=10,
+                             headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'})
+        if resp.status_code in (301, 302, 307, 308):
+            loc = resp.headers.get('Location', '')
+            if '/post/' in loc and '/@' in loc:
+                if loc.startswith('/'):
+                    loc = 'https://www.threads.com' + loc
+                logger.info(f"Threads resolve OK: {loc}")
+                return loc
+    except Exception as e:
+        logger.warning(f"Threads resolve requests.head error: {e}")
 
-    for allow_redirects in [False, True]:
-        try:
-            req = urllib.request.Request(url, method='HEAD' if not allow_redirects else 'GET',
-                headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'})
-            resp = urllib.request.urlopen(req, timeout=10)
-            final_url = resp.url
-            if '/post/' in final_url and '/@' in final_url:
-                logger.info(f"Threads resolve OK: {final_url}")
-                return final_url
-            # Check redirect history
-            if hasattr(resp, 'headers'):
-                loc = resp.headers.get('Location', '')
-                if '/post/' in loc and '/@' in loc:
-                    if loc.startswith('/'):
-                        loc = 'https://www.threads.com' + loc
-                    logger.info(f"Threads resolve header OK: {loc}")
-                    return loc
-        except urllib.error.HTTPError as e:
-            # 301/302 redirects show up here — extract Location
-            if e.code in (301, 302, 307, 308):
-                loc = e.headers.get('Location', '')
-                if '/post/' in loc and '/@' in loc:
-                    if loc.startswith('/'):
-                        loc = 'https://www.threads.com' + loc
-                    logger.info(f"Threads resolve redirect {e.code}: {loc}")
-                    return loc
-        except Exception as e:
-            logger.warning(f"Threads resolve error: {e}")
+    # Fallback: try requests.get with allow_redirects=False
+    try:
+        resp = requests.get(url, allow_redirects=False, timeout=10,
+                            headers={'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'})
+        if resp.status_code in (301, 302, 307, 308):
+            loc = resp.headers.get('Location', '')
+            if '/post/' in loc and '/@' in loc:
+                if loc.startswith('/'):
+                    loc = 'https://www.threads.com' + loc
+                logger.info(f"Threads resolve OK (get): {loc}")
+                return loc
+    except Exception as e:
+        logger.warning(f"Threads resolve requests.get error: {e}")
 
     logger.warning(f"Threads resolve FAILED for {url}")
     return url
