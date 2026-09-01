@@ -187,6 +187,23 @@ def _auto_pull_cookies():
                 if 'sessionid' in f.read():
                     logger.info("Cookies already present, skipping pull")
                     return
+
+        # 1) Try env var COOKIES_B64 (persists across Docker rebuilds)
+        env_b64 = os.environ.get('COOKIES_B64', '').strip()
+        if env_b64:
+            try:
+                content = base64.b64decode(env_b64).decode('utf-8', errors='replace')
+                if 'sessionid' in content:
+                    with open(cookiefile, 'w') as f:
+                        f.write(content)
+                    logger.info(f"Loaded cookies from COOKIES_B64 env var ({len(content)} bytes)")
+                    return
+                else:
+                    logger.warning("COOKIES_B64 env var has no sessionid")
+            except Exception as e:
+                logger.warning(f"COOKIES_B64 decode failed: {e}")
+
+        # 2) Try GitHub
         logger.info("Pulling fresh cookies from GitHub...")
         url = 'https://raw.githubusercontent.com/smmdatacentre-coder/saveas-bot/main/cookies.txt'
         req = urllib.request.Request(url)
@@ -3042,11 +3059,17 @@ async def main():
             ds_match = re.search(r'ds_user_id\t([^\t\n]+)', content)
             line_count = len([l for l in content.splitlines() if l and not l.startswith('#')])
 
+            # Show base64 for Bothost env var
+            import base64 as b64mod
+            b64_str = b64mod.b64encode(content.encode('utf-8')).decode('ascii')
+
             msg = (
                 f"✅ <b>IG cookies обновлены!</b>\n\n"
                 f"sessionid: {'есть' if session_match else 'нет'}\n"
                 f"ds_user_id: {ds_match.group(1) if ds_match else '?'}\n"
-                f"Всего кук: {line_count}"
+                f"Всего кук: {line_count}\n\n"
+                f"📋 <b>Скопируй в переменную COOKIES_B64 на Bothost:</b>\n"
+                f"<code>{b64_str}</code>"
             )
             await message.answer(msg, parse_mode=ParseMode.HTML)
 
@@ -3152,6 +3175,7 @@ async def main():
         added = 0
 
         for url in urls[:10]:
+            url = url.rstrip('\\').rstrip('/')
             platform = detect_platform(url)
             url_type = detect_url_type(url)
 
