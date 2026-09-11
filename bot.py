@@ -1456,24 +1456,24 @@ def _threads_resolve_url(url):
     import ssl
     import urllib.parse
 
-    for path in [urllib.parse.urlparse(url).path.rstrip('/')]:
-        try:
-            parsed = urllib.parse.urlparse(url)
-            ctx = ssl.create_default_context()
-            conn = http.client.HTTPSConnection(parsed.hostname, timeout=10, context=ctx)
-            conn.request('HEAD', path, headers={
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-            })
-            resp = conn.getresponse()
-            loc = resp.getheader('Location', '')
-            conn.close()
-            if resp.status in (301, 302, 307, 308) and '/post/' in loc and '/@' in loc:
-                if loc.startswith('/'):
-                    loc = 'https://www.threads.com' + loc
-                logger.info(f"Threads resolve OK: {loc}")
-                return loc
-        except Exception as e:
-            logger.warning(f"Threads resolve http.client error: {e}")
+    try:
+        parsed = urllib.parse.urlparse(url)
+        ctx = ssl.create_default_context()
+        conn = http.client.HTTPSConnection(parsed.hostname, timeout=10, context=ctx)
+        conn.request('HEAD', parsed.path, headers={
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        })
+        resp = conn.getresponse()
+        loc = resp.getheader('Location', '')
+        conn.close()
+        logger.info(f"Threads resolve: status={resp.status}, Location={loc[:120]}")
+        if resp.status in (301, 302, 307, 308) and '/post/' in loc and '/@' in loc:
+            if loc.startswith('/'):
+                loc = 'https://www.threads.com' + loc
+            logger.info(f"Threads resolve OK: {loc}")
+            return loc
+    except Exception as e:
+        logger.warning(f"Threads resolve error: {e}")
 
     logger.warning(f"Threads resolve FAILED for {url}")
     return url
