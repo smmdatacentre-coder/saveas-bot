@@ -1829,7 +1829,13 @@ def download_threads_post(url):
 
         if not media_urls:
             logger.warning(f"Threads: no media in item. Keys: {list(item.keys())}")
-            logger.warning(f"Threads: item preview: {str(item)[:500]}")
+            logger.warning(f"Threads: media_type={item.get('media_type')}, product_type={item.get('product_type')}")
+            iv2 = item.get('image_versions2')
+            vv = item.get('video_versions')
+            logger.warning(f"Threads: image_versions2={str(iv2)[:300] if iv2 else None}, video_versions={str(vv)[:200] if vv else None}")
+            tpai = item.get('text_post_app_info')
+            if tpai:
+                logger.warning(f"Threads: text_post_app_info keys={list(tpai.keys()) if isinstance(tpai, dict) else type(tpai)}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         caption_text = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
