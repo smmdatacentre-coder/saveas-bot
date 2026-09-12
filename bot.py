@@ -1828,6 +1828,8 @@ def download_threads_post(url):
                     media_urls.append(('image', best['url']))
 
         if not media_urls:
+            logger.warning(f"Threads: no media in item. Keys: {list(item.keys())}")
+            logger.warning(f"Threads: item preview: {str(item)[:500]}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         caption_text = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
