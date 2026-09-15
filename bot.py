@@ -1110,7 +1110,6 @@ def download_tt_carousel(url):
         resp = s.get(url, timeout=20, allow_redirects=True)
         if resp.status_code != 200:
             logger.error(f"TT carousel HTTP {resp.status_code}")
-            return photos, caption, tmp_dir
 
         html = resp.text
 
