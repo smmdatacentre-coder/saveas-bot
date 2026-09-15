@@ -1090,6 +1090,13 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram yt-dlp fallback error: {e}")
 
+    # Filter: for single-video posts (reels), remove static thumbnail if video exists
+    if photos:
+        video_files = [f for f in photos if f.lower().endswith(('.mp4', '.mov', '.webm'))]
+        image_files = [f for f in photos if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
+        if video_files and image_files and len(photos) <= 3:
+            photos = video_files
+
     return photos, caption, tmp_dir
 
 
@@ -1110,7 +1117,6 @@ def download_tt_carousel(url):
         resp = s.get(url, timeout=20, allow_redirects=True)
         if resp.status_code != 200:
             logger.error(f"TT carousel HTTP {resp.status_code}")
-            return photos, caption, tmp_dir
 
         html = resp.text
 
