@@ -1827,32 +1827,6 @@ def download_threads_post(url):
                     media_urls.append(('image', best['url']))
 
         if not media_urls:
-            # Text posts may have embedded media in text_post_app_info
-            tpai = item.get('text_post_app_info', {})
-            inline = tpai.get('linked_inline_media') if isinstance(tpai, dict) else None
-            if inline and isinstance(inline, dict):
-                if inline.get('video_versions'):
-                    best = max(inline['video_versions'], key=lambda x: x.get('type', 0))
-                    media_urls.append(('video', best['url']))
-
-        # If still no video — try yt-dlp on the resolved post URL
-        if not media_urls or (len(media_urls) == 1 and media_urls[0][0] == 'image'):
-            try:
-                post_url = f'https://www.threads.com/@{item.get("user", {}).get("username", "")}/post/{item.get("code", "")}'
-                ydl_opts = {'quiet': True, 'no_warnings': True,
-                            'outtmpl': os.path.join(tmp_dir, 'yt_%(id)s.%(ext)s'),
-                            'format': 'best[ext=mp4]/best'}
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(post_url, download=True)
-                    if info:
-                        media_urls = []
-                        for fp in glob.glob(os.path.join(tmp_dir, 'yt_*')):
-                            if os.path.isfile(fp) and os.path.getsize(fp) > 0:
-                                media_urls.append(('video', 'local:' + fp))
-            except Exception as e:
-                logger.warning(f"Threads yt-dlp fallback error: {e}")
-
-        if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         caption_text = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
@@ -1866,10 +1840,6 @@ def download_threads_post(url):
         files = []
         for i, (mtype, murl) in enumerate(media_urls[:10]):
             try:
-                if murl.startswith('local:'):
-                    # Already downloaded by yt-dlp
-                    files.append(murl[6:])
-                    continue
                 dr = session.get(murl, headers=dl_headers, timeout=60, stream=True)
                 if dr.status_code == 200:
                     ext = 'mp4' if mtype == 'video' else 'jpg'
