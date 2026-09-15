@@ -1090,12 +1090,14 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram yt-dlp fallback error: {e}")
 
-    # Filter: for single-video posts (reels), remove static thumbnail if video exists
+    # Deduplicate: if multiple video files, keep only the largest
     if photos:
         video_files = [f for f in photos if f.lower().endswith(('.mp4', '.mov', '.webm'))]
-        image_files = [f for f in photos if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))]
-        if video_files and image_files and len(photos) <= 3:
-            photos = video_files
+        if len(video_files) > 1:
+            video_files.sort(key=lambda f: os.path.getsize(f), reverse=True)
+            for vf in video_files[1:]:
+                os.remove(vf)
+            photos = [video_files[0]]
 
     return photos, caption, tmp_dir
 
