@@ -829,6 +829,10 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
             if os.path.isfile(fp) and os.path.getsize(fp) > 0:
                 if fp.lower().endswith(('.mp4', '.mov', '.webm')):
                     w, h = extract_video_dimensions(fp)
+                    if not w or not h:
+                        logger.warning(f"IG gallery-dl: invalid video {fp}, removing")
+                        os.remove(fp)
+                        continue
                     if w and h and w == h:
                         logger.warning(f"IG gallery-dl: square video ({w}x{h}), removing")
                         os.remove(fp)
@@ -1037,7 +1041,18 @@ def download_ig_post(url):
 
             with ThreadPoolExecutor(1) as pool:
                 r_photos, r_caption = pool.submit(_il_post).result(timeout=10)
-                photos = r_photos
+                if r_photos:
+                    for fp in r_photos:
+                        if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                            w, h = extract_video_dimensions(fp)
+                            if not w or not h:
+                                logger.warning(f"IG instaloader: invalid video {fp}, skipping")
+                                try:
+                                    os.remove(fp)
+                                except OSError:
+                                    pass
+                                continue
+                        photos.append(fp)
                 if r_caption:
                     caption = r_caption
         except _FutTimeout2:
@@ -1056,7 +1071,17 @@ def download_ig_post(url):
             with ThreadPoolExecutor(1) as pool:
                 b_photos, b_caption = pool.submit(_browser_dl).result(timeout=12)
                 if b_photos:
-                    photos = b_photos
+                    for fp in b_photos:
+                        if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                            w, h = extract_video_dimensions(fp)
+                            if not w or not h:
+                                logger.warning(f"IG browser: invalid video {fp}, skipping")
+                                try:
+                                    os.remove(fp)
+                                except OSError:
+                                    pass
+                                continue
+                        photos.append(fp)
                     if b_caption:
                         caption = b_caption
         except _FutTimeout3:
@@ -1066,7 +1091,19 @@ def download_ig_post(url):
 
     # gallery-dl fallback (needs cookies)
     if not photos:
-        photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
+        gl_photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
+        if gl_photos:
+            for fp in gl_photos:
+                if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                    w, h = extract_video_dimensions(fp)
+                    if not w or not h:
+                        logger.warning(f"IG gallery-dl: invalid video {fp}, skipping")
+                        try:
+                            os.remove(fp)
+                        except OSError:
+                            pass
+                        continue
+                photos.append(fp)
 
     # yt-dlp fallback (needs cookies, non-carousel only)
     if not photos and '/p/' not in url.lower():
@@ -1083,6 +1120,13 @@ def download_ig_post(url):
                         if os.path.isfile(fp) and os.path.getsize(fp) > 0:
                             if fp.lower().endswith(('.mp4', '.mov', '.webm')):
                                 w, h = extract_video_dimensions(fp)
+                                if not w or not h:
+                                    logger.warning(f"IG yt-dlp: invalid video {fp}, skipping")
+                                    try:
+                                        os.remove(fp)
+                                    except OSError:
+                                        pass
+                                    continue
                                 if w and h and w == h:
                                     os.remove(fp)
                                     continue
