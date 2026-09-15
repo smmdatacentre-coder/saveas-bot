@@ -177,6 +177,19 @@ def _check_proxy_exit_ip():
         pass
     return None
 
+def _auto_pull_code():
+    try:
+        import subprocess
+        result = subprocess.run(['git', '-C', BOT_DIR, 'pull', '--ff-only'], capture_output=True, text=True, timeout=15)
+        if result.returncode == 0 and 'Already up to date' not in result.stdout:
+            logger.info(f"Code updated: {result.stdout.strip()}")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+        else:
+            logger.info("Code already up to date")
+    except Exception as e:
+        logger.warning(f"Auto-pull code failed: {e}")
+
+
 def _auto_pull_cookies():
     try:
         import base64
@@ -3678,4 +3691,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    _auto_pull_code()
     asyncio.run(main())
