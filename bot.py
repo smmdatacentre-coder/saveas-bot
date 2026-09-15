@@ -1859,26 +1859,31 @@ def download_threads_post(url):
 
         media_urls = []
 
+        def _best_image(iv2):
+            cands = iv2.get('candidates', []) if isinstance(iv2, dict) else []
+            if cands:
+                best = max(cands, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
+                return best.get('url')
+            return None
+
         if item.get('carousel_media'):
             for cm in item['carousel_media']:
                 if cm.get('video_versions'):
                     best = max(cm['video_versions'], key=lambda x: x.get('type', 0))
                     media_urls.append(('video', best['url']))
                 elif cm.get('image_versions2'):
-                    cands = cm['image_versions2'].get('candidates', [])
-                    if cands:
-                        best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
-                        media_urls.append(('image', best['url']))
+                    url = _best_image(cm['image_versions2'])
+                    if url:
+                        media_urls.append(('image', url))
 
         if not media_urls:
             if item.get('video_versions'):
                 best = max(item['video_versions'], key=lambda x: x.get('type', 0))
                 media_urls.append(('video', best['url']))
             elif item.get('image_versions2'):
-                cands = item['image_versions2'].get('candidates', [])
-                if cands:
-                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
-                    media_urls.append(('image', best['url']))
+                url = _best_image(item['image_versions2'])
+                if url:
+                    media_urls.append(('image', url))
 
         if not media_urls:
             tpai = item.get('text_post_app_info', {})
