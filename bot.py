@@ -1777,6 +1777,16 @@ def _shortcode_to_media_id(shortcode):
     return media_id
 
 
+def _media_id_to_shortcode(media_id):
+    if media_id == 0:
+        return _THREADS_SC_ALPHABET[0]
+    sc = ''
+    while media_id > 0:
+        media_id, rem = divmod(media_id, 64)
+        sc = _THREADS_SC_ALPHABET[rem] + sc
+    return sc
+
+
 def _threads_api_get(shortcode):
     """Fetch Threads post data via threads.net API with IG cookies."""
     cookies = _load_ig_cookies()
@@ -1874,7 +1884,7 @@ def download_threads_post(url):
             tpai = item.get('text_post_app_info', {})
             inline = tpai.get('linked_inline_media') if isinstance(tpai, dict) else None
             if inline and isinstance(inline, dict):
-                ig_code = inline.get('code')
+                ig_code = inline.get('code') or _media_id_to_shortcode(inline.get('pk', 0))
                 ig_user = inline.get('user', {}).get('username', '')
                 if ig_code and ig_user:
                     ig_url = f'https://www.instagram.com/reel/{ig_code}/'
@@ -1882,8 +1892,9 @@ def download_threads_post(url):
                     try:
                         ig_photos, ig_caption, ig_tmp = download_ig_post(ig_url)
                         if ig_photos:
+                            cap = (ig_caption or 'Threads post')[:1024]
                             return {'type': 'video' if any(f.endswith('.mp4') for f in ig_photos) else 'photo',
-                                    'files': ig_photos, 'caption': (ig_caption or full_caption)[:1024]}
+                                    'files': ig_photos, 'caption': cap}
                     except Exception as e:
                         logger.error(f"Threads: linked IG reel download error: {e}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
