@@ -1090,15 +1090,6 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram yt-dlp fallback error: {e}")
 
-    # Deduplicate: if multiple video files, keep only the largest
-    if photos:
-        video_files = [f for f in photos if f.lower().endswith(('.mp4', '.mov', '.webm'))]
-        if len(video_files) > 1:
-            video_files.sort(key=lambda f: os.path.getsize(f), reverse=True)
-            for vf in video_files[1:]:
-                os.remove(vf)
-            photos = [video_files[0]]
-
     return photos, caption, tmp_dir
 
 
@@ -1119,6 +1110,7 @@ def download_tt_carousel(url):
         resp = s.get(url, timeout=20, allow_redirects=True)
         if resp.status_code != 200:
             logger.error(f"TT carousel HTTP {resp.status_code}")
+            return photos, caption, tmp_dir
 
         html = resp.text
 
