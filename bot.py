@@ -1871,6 +1871,21 @@ def download_threads_post(url):
                     media_urls.append(('image', best['url']))
 
         if not media_urls:
+            tpai = item.get('text_post_app_info', {})
+            inline = tpai.get('linked_inline_media') if isinstance(tpai, dict) else None
+            if inline and isinstance(inline, dict):
+                ig_code = inline.get('code')
+                ig_user = inline.get('user', {}).get('username', '')
+                if ig_code and ig_user:
+                    ig_url = f'https://www.instagram.com/reel/{ig_code}/'
+                    logger.info(f"Threads: linked media is IG reel {ig_code}, downloading via IG")
+                    try:
+                        ig_photos, ig_caption, ig_tmp = download_ig_post(ig_url)
+                        if ig_photos:
+                            return {'type': 'video' if any(f.endswith('.mp4') for f in ig_photos) else 'photo',
+                                    'files': ig_photos, 'caption': (ig_caption or full_caption)[:1024]}
+                    except Exception as e:
+                        logger.error(f"Threads: linked IG reel download error: {e}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         caption_text = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
