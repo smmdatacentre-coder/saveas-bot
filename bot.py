@@ -1834,29 +1834,23 @@ def download_threads_post(url):
                 if inline.get('video_versions'):
                     best = max(inline['video_versions'], key=lambda x: x.get('type', 0))
                     media_urls.append(('video', best['url']))
-                else:
-                    # API returns only image for linked video — try yt-dlp
-                    linked_code = inline.get('code', '')
-                    linked_user = inline.get('user', {}).get('username', '') if isinstance(inline.get('user'), dict) else ''
-                    if linked_code:
-                        linked_url = f'https://www.threads.com/@{linked_user}/post/{linked_code}' if linked_user else f'https://www.threads.com/post/{linked_code}'
-                        try:
-                            ydl_opts = {'quiet': True, 'no_warnings': True, 'skip_download': False,
-                                        'outtmpl': os.path.join(tmp_dir, 'linked_%(id)s.%(ext)s'),
-                                        'format': 'best[ext=mp4]/best'}
-                            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                                info = ydl.extract_info(linked_url, download=True)
-                                if info:
-                                    for fp in glob.glob(os.path.join(tmp_dir, 'linked_*')):
-                                        if os.path.isfile(fp) and os.path.getsize(fp) > 0:
-                                            media_urls.append(('video', 'local:' + fp))
-                        except Exception as e:
-                            logger.warning(f"Threads linked yt-dlp error: {e}")
-                    if not media_urls and inline.get('image_versions2'):
-                        cands = inline['image_versions2'].get('candidates', [])
-                        if cands:
-                            best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
-                            media_urls.append(('image', best['url']))
+
+        # If still no video — try yt-dlp on the resolved post URL
+        if not media_urls or (len(media_urls) == 1 and media_urls[0][0] == 'image'):
+            try:
+                post_url = f'https://www.threads.com/@{item.get("user", {}).get("username", "")}/post/{item.get("code", "")}'
+                ydl_opts = {'quiet': True, 'no_warnings': True,
+                            'outtmpl': os.path.join(tmp_dir, 'yt_%(id)s.%(ext)s'),
+                            'format': 'best[ext=mp4]/best'}
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(post_url, download=True)
+                    if info:
+                        media_urls = []
+                        for fp in glob.glob(os.path.join(tmp_dir, 'yt_*')):
+                            if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                                media_urls.append(('video', 'local:' + fp))
+            except Exception as e:
+                logger.warning(f"Threads yt-dlp fallback error: {e}")
 
         if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
