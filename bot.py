@@ -1616,7 +1616,7 @@ def _get_carousel_from_feed(username, shortcode):
             if not isinstance(item, dict):
                 continue
             if item.get('video_versions'):
-                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                best = max(item['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
                 url = best.get('url')
                 if url:
                     carousel_urls.append(('video', url))
@@ -1728,7 +1728,7 @@ def _extract_threads_post_data(html, shortcode, username=None):
                 try:
                     vids = json.loads(vid_json)
                     if vids:
-                        best_v = max(vids, key=lambda x: x.get('type', 0))
+                        best_v = max(vids, key=lambda x: int(x.get('type', 0) or 0))
                         vid_url = best_v.get('url', '')
                 except:
                     pass
@@ -1740,7 +1740,7 @@ def _extract_threads_post_data(html, shortcode, username=None):
             if not isinstance(item, dict):
                 continue
             if item.get('video_versions'):
-                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                best = max(item['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
                 carousel_urls.append(('video', best.get('url', '')))
             elif item.get('image_versions2'):
                 cands = item['image_versions2'].get('candidates', [])
@@ -1882,7 +1882,7 @@ def download_threads_post(url):
         if item.get('carousel_media'):
             for cm in item['carousel_media']:
                 if cm.get('video_versions'):
-                    best = max(cm['video_versions'], key=lambda x: x.get('type', 0))
+                    best = max(cm['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
                     media_urls.append(('video', best['url']))
                 elif cm.get('image_versions2'):
                     url = _best_image(cm['image_versions2'])
@@ -1891,7 +1891,7 @@ def download_threads_post(url):
 
         if not media_urls:
             if item.get('video_versions'):
-                best = max(item['video_versions'], key=lambda x: x.get('type', 0))
+                best = max(item['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
                 media_urls.append(('video', best['url']))
             elif item.get('image_versions2'):
                 url = _best_image(item['image_versions2'])
@@ -1958,7 +1958,8 @@ def download_threads_post(url):
             return {'type': 'media_group', 'files': files, 'caption': full_caption[:1024]}
 
     except Exception as e:
-        logger.error(f"Threads download error: {e}")
+        import traceback
+        logger.error(f"Threads download error: {e}\n{traceback.format_exc()}")
         return {'type': 'error', 'error': str(e)[:200]}
 
 
@@ -2144,7 +2145,7 @@ def download_youtube_innertube(url, audio_only=False, quality=None):
                 if not audio_fmts:
                     logger.warning(f"Innertube {client_cfg['clientName']}: no audio formats")
                     continue
-                audio_fmts.sort(key=lambda f: f.get('bitrate', 0), reverse=True)
+                audio_fmts.sort(key=lambda f: int(f.get('bitrate', 0) or 0), reverse=True)
                 chosen = audio_fmts[0]
             else:
                 video_fmts = [f for f in formats if f.get('mimeType', '').startswith('video/')]
