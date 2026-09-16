@@ -192,6 +192,17 @@ def _auto_pull_code():
 
 def _auto_pull_cookies():
     try:
+        import subprocess as _sp
+        bot_py = os.path.join(BOT_DIR, 'bot.py')
+        old_mtime = os.path.getmtime(bot_py) if os.path.exists(bot_py) else 0
+        _sp.run(['git', '-C', BOT_DIR, 'pull', '--ff-only'], capture_output=True, timeout=15)
+        new_mtime = os.path.getmtime(bot_py) if os.path.exists(bot_py) else 0
+        if new_mtime > old_mtime:
+            logger.info("Code updated, restarting...")
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception:
+        pass
+    try:
         import base64
         import urllib.request
         cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
