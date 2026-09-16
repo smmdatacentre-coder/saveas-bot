@@ -192,25 +192,6 @@ def _auto_pull_code():
 
 def _auto_pull_cookies():
     try:
-        import hashlib as _hl
-        import urllib.request as _ur
-        bot_py = os.path.join(BOT_DIR, 'bot.py')
-        url = 'https://raw.githubusercontent.com/smmdatacentre-coder/saveas-bot/main/bot.py'
-        resp = _ur.urlopen(url, timeout=20)
-        new_code = resp.read()
-        old_hash = ''
-        if os.path.exists(bot_py):
-            with open(bot_py, 'rb') as f:
-                old_hash = _hl.md5(f.read()).hexdigest()
-        new_hash = _hl.md5(new_code).hexdigest()
-        if new_hash != old_hash:
-            with open(bot_py, 'wb') as f:
-                f.write(new_code)
-            logger.info("Code updated from GitHub, restarting...")
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-    except Exception as e:
-        logger.warning(f"Auto-pull code failed: {e}")
-    try:
         import base64
         import urllib.request
         cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
