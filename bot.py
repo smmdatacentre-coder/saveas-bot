@@ -896,7 +896,7 @@ def download_ig_post(url):
                 if media_type == 2:
                     vids = item.get('video_versions', [])
                     if vids:
-                        vids.sort(key=lambda v: v.get('width', 0) * v.get('height', 0), reverse=True)
+                        vids.sort(key=lambda v: int(v.get('width', 0) or 0) * int(v.get('height', 0) or 0), reverse=True)
                         dl_url = vids[0]['url']
                         data = _ig_download_bytes(dl_url)
                         if data:
@@ -908,7 +908,7 @@ def download_ig_post(url):
                 elif item.get('image_versions2'):
                     cands = item['image_versions2'].get('candidates', [])
                     if cands:
-                        best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                        best = max(cands, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
                         dl_url = best.get('url')
                         if dl_url:
                             data = _ig_download_bytes(dl_url)
@@ -1623,7 +1623,7 @@ def _get_carousel_from_feed(username, shortcode):
             elif item.get('image_versions2'):
                 cands = item['image_versions2'].get('candidates', [])
                 if cands:
-                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                    best = max(cands, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
                     url = best.get('url')
                     if url:
                         carousel_urls.append(('image', url))
@@ -1711,7 +1711,7 @@ def _extract_threads_post_data(html, shortcode, username=None):
             try:
                 imgs = json.loads(img_json)
                 if imgs:
-                    best_img = max(imgs, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                    best_img = max(imgs, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
                     img_url = best_img.get('url', '')
             except:
                 pass
@@ -1745,7 +1745,7 @@ def _extract_threads_post_data(html, shortcode, username=None):
             elif item.get('image_versions2'):
                 cands = item['image_versions2'].get('candidates', [])
                 if cands:
-                    best = max(cands, key=lambda x: x.get('width', 0) * x.get('height', 0))
+                    best = max(cands, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
                     carousel_urls.append(('image', best.get('url', '')))
 
     # If no carousel on post page, try to fetch from user's feed
@@ -2150,13 +2150,13 @@ def download_youtube_innertube(url, audio_only=False, quality=None):
                 video_fmts = [f for f in formats if f.get('mimeType', '').startswith('video/')]
                 if quality:
                     h = int(quality.replace('p', ''))
-                    video_fmts = [f for f in video_fmts if f.get('height', 0) <= h]
+                    video_fmts = [f for f in video_fmts if int(f.get('height', 0) or 0) <= h]
                 if not video_fmts:
                     video_fmts = [f for f in formats if f.get('mimeType', '').startswith('video/')]
                 if not video_fmts:
                     logger.warning(f"Innertube {client_cfg['clientName']}: no video formats")
                     continue
-                video_fmts.sort(key=lambda f: (f.get('height', 0), f.get('bitrate', 0)), reverse=True)
+                video_fmts.sort(key=lambda f: (int(f.get('height', 0) or 0), int(f.get('bitrate', 0) or 0)), reverse=True)
                 chosen = video_fmts[0]
 
             stream_url = chosen.get('url')
