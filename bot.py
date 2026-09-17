@@ -989,7 +989,82 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram story browser fallback error: {e}")
 
-    # instaloader — primary method for reels (worked on Sep 5)
+    # yt-dlp FIRST for reels (has its own IG extractor with cookies)
+    if '/p/' not in url.lower():
+        try:
+            ydl_opts = make_ydl_opts()
+            ydl_opts['outtmpl'] = os.path.join(tmp_dir, '%(id)s.%(ext)s')
+            ydl_opts['format'] = 'best[ext=mp4]/best'
+            if cookies_file:
+                ydl_opts['cookiefile'] = cookies_file
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                if info:
+                    for fp in glob.glob(os.path.join(tmp_dir, f"{info.get('id', '')}.*")):
+                        if os.path.isfile(fp) and os.path.getsize(fp) > 0:
+                            if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                                w, h = extract_video_dimensions(fp)
+                                if not w or not h:
+                                    logger.warning(f"IG yt-dlp: invalid video {fp}, skipping")
+                                    try:
+                                        os.remove(fp)
+                                    except OSError:
+                                        pass
+                                    continue
+                            photos.append(fp)
+                    if photos:
+                        cap = info.get('description', '') or info.get('title', '') or ''
+                        if cap:
+                            caption = cap
+        except Exception as e:
+            logger.error(f"Instagram yt-dlp error: {e}")
+
+    # gallery-dl second (needs cookies)
+    if not photos:
+        gl_photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
+        if gl_photos:
+            for fp in gl_photos:
+                if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                    w, h = extract_video_dimensions(fp)
+                    if not w or not h:
+                        logger.warning(f"IG gallery-dl: invalid video {fp}, skipping")
+                        try:
+                            os.remove(fp)
+                        except OSError:
+                            pass
+                        continue
+                photos.append(fp)
+
+    # Browser third — headless Chrome
+    if not photos:
+        try:
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout3
+
+            def _browser_dl():
+                return _download_ig_browser(url, tmp_dir)
+
+            with ThreadPoolExecutor(1) as pool:
+                b_photos, b_caption = pool.submit(_browser_dl).result(timeout=12)
+                if b_photos:
+                    for fp in b_photos:
+                        if fp.lower().endswith(('.mp4', '.mov', '.webm')):
+                            w, h = extract_video_dimensions(fp)
+                            if not w or not h:
+                                logger.warning(f"IG browser: invalid video {fp}, skipping")
+                                try:
+                                    os.remove(fp)
+                                except OSError:
+                                    pass
+                                continue
+                        photos.append(fp)
+                    if b_caption:
+                        caption = b_caption
+        except _FutTimeout3:
+            logger.error("Instagram browser timeout")
+        except Exception as e:
+            logger.error(f"Instagram browser error: {e}")
+
+    # instaloader last — times out from datacenter
     if '/p/' not in url.lower():
         try:
             import instaloader as _il
@@ -1071,81 +1146,7 @@ def download_ig_post(url):
         except _FutTimeout2:
             logger.error("Instagram instaloader timeout")
         except Exception as e:
-            logger.error(f"Instagram instaloader fallback error: {e}")
-
-    # Browser fallback — headless Chrome bypasses API blocking
-    if not photos:
-        try:
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutTimeout3
-
-            def _browser_dl():
-                return _download_ig_browser(url, tmp_dir)
-
-            with ThreadPoolExecutor(1) as pool:
-                b_photos, b_caption = pool.submit(_browser_dl).result(timeout=12)
-                if b_photos:
-                    for fp in b_photos:
-                        if fp.lower().endswith(('.mp4', '.mov', '.webm')):
-                            w, h = extract_video_dimensions(fp)
-                            if not w or not h:
-                                logger.warning(f"IG browser: invalid video {fp}, skipping")
-                                try:
-                                    os.remove(fp)
-                                except OSError:
-                                    pass
-                                continue
-                        photos.append(fp)
-                    if b_caption:
-                        caption = b_caption
-        except _FutTimeout3:
-            logger.error("Instagram browser fallback timeout")
-        except Exception as e:
-            logger.error(f"Instagram browser fallback error: {e}")
-
-    # gallery-dl fallback (needs cookies)
-    if not photos:
-        gl_photos = _ig_gallery_dl(url, tmp_dir, cookies_file)
-        if gl_photos:
-            for fp in gl_photos:
-                if fp.lower().endswith(('.mp4', '.mov', '.webm')):
-                    w, h = extract_video_dimensions(fp)
-                    if not w or not h:
-                        logger.warning(f"IG gallery-dl: invalid video {fp}, skipping")
-                        try:
-                            os.remove(fp)
-                        except OSError:
-                            pass
-                        continue
-                photos.append(fp)
-
-    # yt-dlp fallback (needs cookies, non-carousel only)
-    if not photos and '/p/' not in url.lower():
-        try:
-            ydl_opts = make_ydl_opts()
-            ydl_opts['outtmpl'] = os.path.join(tmp_dir, '%(id)s.%(ext)s')
-            ydl_opts['format'] = 'best[ext=mp4]/best'
-            if cookies_file:
-                ydl_opts['cookiefile'] = cookies_file
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                if info:
-                    for fp in glob.glob(os.path.join(tmp_dir, f"{info.get('id', '')}.*")):
-                        if os.path.isfile(fp) and os.path.getsize(fp) > 0:
-                            if fp.lower().endswith(('.mp4', '.mov', '.webm')):
-                                w, h = extract_video_dimensions(fp)
-                                if not w or not h:
-                                    logger.warning(f"IG yt-dlp: invalid video {fp}, skipping")
-                                    try:
-                                        os.remove(fp)
-                                    except OSError:
-                                        pass
-                                    continue
-                                if w and h and w == h:
-                                    os.remove(fp)
-                                    continue
-                            photos.append(fp)
-        except Exception as e:
-            logger.error(f"Instagram yt-dlp fallback error: {e}")
+            logger.error(f"Instagram instaloader error: {e}")
 
     return photos, caption, tmp_dir
 
