@@ -1897,7 +1897,7 @@ def download_threads_post(url):
             tpai = item.get('text_post_app_info', {})
             inline = tpai.get('linked_inline_media') if isinstance(tpai, dict) else None
             if inline and isinstance(inline, dict):
-                ig_code = inline.get('code') or _media_id_to_shortcode(inline.get('pk', 0))
+                ig_code = inline.get('code') or _media_id_to_shortcode(int(inline.get('pk') or 0))
                 ig_user = inline.get('user', {}).get('username', '')
                 if ig_code and ig_user:
                     ig_url = f'https://www.instagram.com/reel/{ig_code}/'
