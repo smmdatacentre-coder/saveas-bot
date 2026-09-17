@@ -11,10 +11,10 @@
 .instagram.com	TRUE	/	TRUE	1788418177	wd	1365x754
 .instagram.com	TRUE	/	TRUE	1824124952	csrftoken	SVI9NGtE9zabxIf6T5uWEwlifBDhI5G2
 .instagram.com	TRUE	/	TRUE	1805278760	datr	OwaLabVEhfIPq2NLjqbAJpQW
-.instagram.com	TRUE	/	TRUE	1797340952	ds_user_id	285544205
+.instagram.com	TRUE	/	TRUE	1797398924	ds_user_id	285544205
 .instagram.com	TRUE	/	TRUE	1802254760	ig_did	E04C9D5C-F27C-40A7-A103-E09AA0500E55
 .instagram.com	TRUE	/	TRUE	1815849065	mid	aixQZwAEAAGeiEaagLMoXMx4g3Bs
 .instagram.com	TRUE	/	TRUE	1805278784	ps_l	1
 .instagram.com	TRUE	/	TRUE	1805278784	ps_n	1
-.instagram.com	TRUE	/	TRUE	1821100931	sessionid	285544205%3AIRFo1tJtHJX4k1%3A27%3AAYljkDGkL1HSKOPhkCb-6LaWkGPqvG0vFLPkgr8XRg
-.instagram.com	TRUE	/	TRUE	1790169735	wd	1454x764
+.instagram.com	TRUE	/	TRUE	1821158924	sessionid	285544205%3Ak9whSzaZzJOC6M%3A24%3AAYnu_oiB1S-wIlrNIVzVPLs6V38BZdTfgP257-0zTQ
+.instagram.com	TRUE	/	TRUE	1790227714	wd	1454x764
