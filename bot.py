@@ -195,11 +195,6 @@ def _auto_pull_cookies():
         import base64
         import urllib.request
         cookiefile = os.path.join(BOT_DIR, 'cookies.txt')
-        if os.path.exists(cookiefile) and os.path.getsize(cookiefile) > 50:
-            with open(cookiefile) as f:
-                if 'sessionid' in f.read():
-                    logger.info("Cookies already present, skipping pull")
-                    return
 
         # 1) Try env var COOKIES_B64 (persists across Docker rebuilds)
         env_b64 = os.environ.get('COOKIES_B64', '').strip()
