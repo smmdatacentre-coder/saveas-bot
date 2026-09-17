@@ -1931,22 +1931,7 @@ def download_threads_post(url):
                 if u:
                     media_urls.append(('image', u))
 
-        # linked_inline_media — IG reel embedded in text post, download as ADDITIONAL media
-        linked_ig_files = []
-        inline = tpai.get('linked_inline_media') if isinstance(tpai, dict) else None
-        if inline and isinstance(inline, dict):
-            ig_code = inline.get('code') or _media_id_to_shortcode(int(inline.get('pk') or 0))
-            if ig_code:
-                ig_url = f'https://www.instagram.com/reel/{ig_code}/'
-                logger.info(f"Threads: linked media is IG reel {ig_code}, downloading via IG")
-                try:
-                    ig_photos, ig_caption, ig_tmp = download_ig_post(ig_url)
-                    if ig_photos:
-                        linked_ig_files = ig_photos
-                except Exception as e:
-                    logger.error(f"Threads: linked IG reel download error: {e}")
-
-        if not media_urls and not linked_ig_files:
+        if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         dl_headers = {
@@ -1974,9 +1959,6 @@ def download_threads_post(url):
                         files.append(filepath)
             except Exception as e:
                 logger.error(f"Threads media download [{i}]: {e}")
-
-        # Append linked IG reel files to the main files list
-        files.extend(linked_ig_files)
 
         if not files:
             return {'type': 'error', 'error': 'Не удалось скачать медиа'}
