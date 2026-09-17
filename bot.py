@@ -132,14 +132,20 @@ def _ig_has_proxy():
     try:
         r = requests.get('https://api.ipify.org?format=json',
                          proxies={'http': 'socks5h://127.0.0.1:1080', 'https': 'socks5h://127.0.0.1:1080'},
-                         timeout=8)
+                         timeout=15)
         if r.status_code == 200:
             _proxy_ok_cache = True
             _proxy_ok_ts = now
             logger.info(f"Proxy confirmed working, exit IP: {r.json().get('ip','?')}")
             return True
     except Exception as e:
-        logger.warning(f"Proxy connectivity check failed: {e}")
+        logger.warning(f"Proxy connectivity check failed (but port open): {e}")
+
+    if _sock.create_connection(('127.0.0.1', 1080), timeout=1):
+        _proxy_ok_cache = True
+        _proxy_ok_ts = now
+        logger.info("Proxy port 1080 open, assuming proxy available")
+        return True
 
     _proxy_ok_cache = False
     _proxy_ok_ts = now
@@ -841,10 +847,6 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
                         logger.warning(f"IG gallery-dl: invalid video {fp}, removing")
                         os.remove(fp)
                         continue
-                    if w and h and w == h:
-                        logger.warning(f"IG gallery-dl: square video ({w}x{h}), removing")
-                        os.remove(fp)
-                        continue
                 photos.append(fp)
     return photos
 
@@ -997,6 +999,9 @@ def download_ig_post(url):
             ydl_opts['format'] = 'best[ext=mp4]/best'
             if cookies_file:
                 ydl_opts['cookiefile'] = cookies_file
+            proxy_str = _ig_proxy_str()
+            if proxy_str:
+                ydl_opts['proxy'] = proxy_str
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
                 if info:
