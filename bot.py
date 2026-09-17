@@ -989,77 +989,7 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram story browser fallback error: {e}")
 
-    # IG API first for reels/TV — same as stories
-    if '/p/' not in url.lower():
-        try:
-            sc = _extract_ig_shortcode(url)
-            if sc:
-                pk = _ig_get_media_pk(sc)
-                if pk:
-                    item = _ig_api_get(pk)
-                    if item:
-                        media_type = item.get('media_type', 1)
-                        if media_type == 2:
-                            vids = item.get('video_versions', [])
-                            if vids:
-                                vids.sort(key=lambda v: int(v.get('width', 0) or 0) * int(v.get('height', 0) or 0), reverse=True)
-                                dl_url = vids[0]['url']
-                                data = _ig_download_bytes(dl_url)
-                                if data:
-                                    fp = os.path.join(tmp_dir, f"{sc}.mp4")
-                                    with open(fp, 'wb') as f:
-                                        f.write(data)
-                                    if os.path.getsize(fp) > 0:
-                                        cap = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
-                                        photos = [fp]
-                                        caption = cap
-                        if not photos and item.get('image_versions2'):
-                            cands = item['image_versions2'].get('candidates', [])
-                            if cands:
-                                best = max(cands, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
-                                dl_url = best.get('url')
-                                if dl_url:
-                                    data = _ig_download_bytes(dl_url)
-                                    if data:
-                                        fp = os.path.join(tmp_dir, f"{sc}.jpg")
-                                        with open(fp, 'wb') as f:
-                                            f.write(data)
-                                        if os.path.getsize(fp) > 0:
-                                            cap = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
-                                            photos = [fp]
-                                            caption = cap
-                        if not photos and item.get('carousel_media'):
-                            for cm in item['carousel_media']:
-                                if cm.get('video_versions'):
-                                    vids = cm['video_versions']
-                                    vids.sort(key=lambda v: int(v.get('width', 0) or 0) * int(v.get('height', 0) or 0), reverse=True)
-                                    data = _ig_download_bytes(vids[0]['url'])
-                                    if data:
-                                        fp = os.path.join(tmp_dir, f"media_{len(photos)}.mp4")
-                                        with open(fp, 'wb') as f:
-                                            f.write(data)
-                                        if os.path.getsize(fp) > 0:
-                                            photos.append(fp)
-                                elif cm.get('image_versions2'):
-                                    cands = cm['image_versions2'].get('candidates', [])
-                                    if cands:
-                                        best = max(cands, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
-                                        data = _ig_download_bytes(best.get('url', ''))
-                                        if data:
-                                            fp = os.path.join(tmp_dir, f"media_{len(photos)}.jpg")
-                                            with open(fp, 'wb') as f:
-                                                f.write(data)
-                                            if os.path.getsize(fp) > 0:
-                                                photos.append(fp)
-                            if photos:
-                                cap = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
-                                caption = cap
-                        if photos:
-                            return photos, caption, tmp_dir
-        except Exception as e:
-            logger.error(f"Instagram API reel error: {e}")
-
-    # instaloader FIRST — works WITHOUT cookies
+    # instaloader — primary method for reels (worked on Sep 5)
     if '/p/' not in url.lower():
         try:
             import instaloader as _il
