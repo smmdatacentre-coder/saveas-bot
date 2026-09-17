@@ -850,22 +850,27 @@ def _ig_gallery_dl(url, tmp_dir, cookies_file=None):
 
 
 def _ig_download_bytes(url, timeout=30):
-    """Download bytes from IG URL using curl_cffi (bypasses TLS fingerprinting)."""
+    """Download bytes from IG URL using curl_cffi (bypasses TLS fingerprinting).
+    Automatically loads IG cookies for instagram CDN URLs — required to avoid
+    encrypted/empty video frames served without authentication."""
     proxy = _ig_proxies()
+    ig_cookies = {}
+    if 'instagram' in url or 'cdninstagram' in url:
+        ig_cookies = _load_ig_cookies()
     try:
         if HAS_CURL_CFFI and not proxy:
-            r = cf_requests.get(url, impersonate="chrome", timeout=timeout)
+            r = cf_requests.get(url, impersonate="chrome", cookies=ig_cookies or None, timeout=timeout)
             if r.status_code == 200:
                 return r.content
         else:
-            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}, timeout=timeout, proxies=proxy)
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'}, cookies=ig_cookies or None, timeout=timeout, proxies=proxy)
             if r.status_code == 200:
                 return r.content
     except Exception as e:
         logger.error(f"IG download error (proxy={bool(proxy)}): {e}")
     if proxy:
         try:
-            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, timeout=timeout)
+            r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, cookies=ig_cookies or None, timeout=timeout)
             if r.status_code == 200:
                 return r.content
         except Exception as e:
@@ -1935,6 +1940,39 @@ def download_threads_post(url):
         if not item:
             return {'type': 'error', 'error': 'Threads API: пост не найден или нет доступа'}
 
+        # Extract text from text_post_app_info (Threads text posts)
+        tpai = item.get('text_post_app_info', {}) if isinstance(item.get('text_post_app_info'), dict) else {}
+        thread_text = tpai.get('text', '') or ''
+
+        def _threads_decode_unicode(m):
+            code = int(m.group(1), 16)
+            try:
+                return chr(code)
+            except (ValueError, OverflowError):
+                return m.group(0)
+
+        thread_text = re.sub(r'\\u([0-9a-fA-F]{4})', _threads_decode_unicode, thread_text)
+        thread_text = thread_text.replace('\\n', '\n').replace('\\/', '/').replace('\\"', '"')
+
+        # Also check item.caption as fallback
+        if not thread_text:
+            thread_text = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
+
+        # Detect language flag and append
+        lang_flag = ''
+        if thread_text:
+            has_cyrillic = bool(re.search(r'[а-яА-ЯёЁ]', thread_text))
+            has_latin = bool(re.search(r'[a-zA-Z]', thread_text))
+            if has_cyrillic and not has_latin:
+                lang_flag = '🇷🇺 '
+            elif has_latin and not has_cyrillic:
+                lang_flag = '🇺🇸 '
+            elif has_cyrillic and has_latin:
+                lang_flag = '🇷🇺🇺🇸 '
+
+        full_caption = f"{lang_flag}{thread_text[:1024]}\n\n📎 скачано с @saverdshot_bot" if thread_text else '📎 скачано с @saverdshot_bot'
+        full_caption = full_caption[:1024]
+
         media_urls = []
 
         def _best_image(iv2):
@@ -1950,40 +1988,36 @@ def download_threads_post(url):
                     best = max(cm['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
                     media_urls.append(('video', best['url']))
                 elif cm.get('image_versions2'):
-                    url = _best_image(cm['image_versions2'])
-                    if url:
-                        media_urls.append(('image', url))
+                    u = _best_image(cm['image_versions2'])
+                    if u:
+                        media_urls.append(('image', u))
 
         if not media_urls:
             if item.get('video_versions'):
                 best = max(item['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
                 media_urls.append(('video', best['url']))
             elif item.get('image_versions2'):
-                url = _best_image(item['image_versions2'])
-                if url:
-                    media_urls.append(('image', url))
+                u = _best_image(item['image_versions2'])
+                if u:
+                    media_urls.append(('image', u))
 
-        if not media_urls:
-            tpai = item.get('text_post_app_info', {})
-            inline = tpai.get('linked_inline_media') if isinstance(tpai, dict) else None
-            if inline and isinstance(inline, dict):
-                ig_code = inline.get('code') or _media_id_to_shortcode(int(inline.get('pk') or 0))
-                ig_user = inline.get('user', {}).get('username', '')
-                if ig_code and ig_user:
-                    ig_url = f'https://www.instagram.com/reel/{ig_code}/'
-                    logger.info(f"Threads: linked media is IG reel {ig_code}, downloading via IG")
-                    try:
-                        ig_photos, ig_caption, ig_tmp = download_ig_post(ig_url)
-                        if ig_photos:
-                            cap = (ig_caption or 'Threads post')[:1024]
-                            return {'type': 'video' if any(f.endswith('.mp4') for f in ig_photos) else 'photo',
-                                    'files': ig_photos, 'caption': cap}
-                    except Exception as e:
-                        logger.error(f"Threads: linked IG reel download error: {e}")
+        # linked_inline_media — IG reel embedded in text post, download as ADDITIONAL media
+        linked_ig_files = []
+        inline = tpai.get('linked_inline_media') if isinstance(tpai, dict) else None
+        if inline and isinstance(inline, dict):
+            ig_code = inline.get('code') or _media_id_to_shortcode(int(inline.get('pk') or 0))
+            if ig_code:
+                ig_url = f'https://www.instagram.com/reel/{ig_code}/'
+                logger.info(f"Threads: linked media is IG reel {ig_code}, downloading via IG")
+                try:
+                    ig_photos, ig_caption, ig_tmp = download_ig_post(ig_url)
+                    if ig_photos:
+                        linked_ig_files = ig_photos
+                except Exception as e:
+                    logger.error(f"Threads: linked IG reel download error: {e}")
+
+        if not media_urls and not linked_ig_files:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
-
-        caption_text = item.get('caption', {}).get('text', '') if isinstance(item.get('caption'), dict) else ''
-        full_caption = f"{caption_text[:500]}\n\n📎 скачано с @saverdshot_bot" if caption_text else 'Threads post'
 
         dl_headers = {
             'User-Agent': 'Instagram 275.0.0.27.98 Android',
@@ -2011,16 +2045,18 @@ def download_threads_post(url):
             except Exception as e:
                 logger.error(f"Threads media download [{i}]: {e}")
 
+        # Append linked IG reel files to the main files list
+        files.extend(linked_ig_files)
+
         if not files:
             return {'type': 'error', 'error': 'Не удалось скачать медиа'}
 
         has_video = any(f.lower().endswith('.mp4') for f in files)
-        if has_video and len(files) == 1:
-            return {'type': 'video', 'files': files, 'caption': full_caption[:1024]}
-        elif len(files) == 1:
-            return {'type': 'photo', 'files': files, 'caption': full_caption[:1024]}
+        if len(files) == 1:
+            mtype = 'video' if has_video else 'photo'
+            return {'type': mtype, 'files': files, 'caption': full_caption}
         else:
-            return {'type': 'media_group', 'files': files, 'caption': full_caption[:1024]}
+            return {'type': 'media_group', 'files': files, 'caption': full_caption}
 
     except Exception as e:
         import traceback
@@ -2807,20 +2843,22 @@ async def process_queue(chat_id, bot, loop):
                         caption = threads_result.get('caption', '')
                         sent_ok = False
                         if threads_result.get('type') == 'media_group' and len(files) > 1:
-                            try:
-                                from aiogram.types import InputMediaPhoto, InputMediaVideo
-                                media_group = []
-                                for i, fpath in enumerate(files[:10]):
-                                    is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
-                                    fobj = FSInputFile(fpath)
-                                    if is_video:
-                                        media_group.append(InputMediaVideo(media=fobj, caption=caption[:1024] if i == 0 else None))
-                                    else:
-                                        media_group.append(InputMediaPhoto(media=fobj, caption=caption[:1024] if i == 0 else None))
-                                await bot.send_media_group(chat_id=chat_id, media=media_group)
-                                sent_ok = True
-                            except Exception as e:
-                                logger.error(f"Threads media_group send error: {e}")
+                            video_count = sum(1 for f in files if f.lower().endswith(('.mp4', '.webm', '.mov')))
+                            if video_count <= 1:
+                                try:
+                                    from aiogram.types import InputMediaPhoto, InputMediaVideo
+                                    media_group = []
+                                    for i, fpath in enumerate(files[:10]):
+                                        is_video = fpath.lower().endswith(('.mp4', '.webm', '.mov'))
+                                        fobj = FSInputFile(fpath)
+                                        if is_video:
+                                            media_group.append(InputMediaVideo(media=fobj, caption=caption[:1024] if i == 0 else None))
+                                        else:
+                                            media_group.append(InputMediaPhoto(media=fobj, caption=caption[:1024] if i == 0 else None))
+                                    await bot.send_media_group(chat_id=chat_id, media=media_group)
+                                    sent_ok = True
+                                except Exception as e:
+                                    logger.error(f"Threads media_group send error: {e}")
                         if not sent_ok:
                             for i, fpath in enumerate(files):
                                 try:
