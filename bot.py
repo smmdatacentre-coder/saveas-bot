@@ -917,6 +917,18 @@ def download_ig_post(url):
         except Exception as e:
             logger.error(f"Instagram story API error: {e}")
 
+        # Browser fallback for stories — IG API often returns 404 for story media_id
+        try:
+            from concurrent.futures import ThreadPoolExecutor as _TPE, TimeoutError as _FutTimeoutS
+            with _TPE(1) as pool:
+                b_photos, _ = pool.submit(_download_ig_browser, url, tmp_dir).result(timeout=15)
+                if b_photos:
+                    return b_photos, '', tmp_dir
+        except _FutTimeoutS:
+            logger.error("Instagram story browser timeout")
+        except Exception as e:
+            logger.error(f"Instagram story browser fallback error: {e}")
+
         # instaloader fallback for stories (with timeout)
         try:
             import instaloader as _il
