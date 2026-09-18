@@ -1087,18 +1087,18 @@ def download_ig_post(url):
                     cap = post.caption or ''
                     if post.is_video and post.video_url:
                         fp = os.path.join(tmp_dir, f"{post.shortcode}.mp4")
-                        r = loader.context.get(post.video_url)
-                        if r.status_code == 200:
+                        data = _ig_download_bytes(post.video_url)
+                        if data:
                             with open(fp, 'wb') as f:
-                                f.write(r.content)
+                                f.write(data)
                             if os.path.getsize(fp) > 0:
                                 result_photos.append(fp)
                     elif post.url:
                         fp = os.path.join(tmp_dir, f"{post.shortcode}.jpg")
-                        r = loader.context.get(post.url)
-                        if r.status_code == 200:
+                        data = _ig_download_bytes(post.url)
+                        if data:
                             with open(fp, 'wb') as f:
-                                f.write(r.content)
+                                f.write(data)
                             if os.path.getsize(fp) > 0:
                                 result_photos.append(fp)
                     if not result_photos and post.typename == 'GraphSidecar':
@@ -1112,8 +1112,8 @@ def download_ig_post(url):
                             else:
                                 continue
                             fp = os.path.join(tmp_dir, f"{i}.{ext}")
-                            r = loader.context.get(dl_url)
-                            if r.status_code == 200:
+                            data = _ig_download_bytes(dl_url)
+                            if data:
                                 with open(fp, 'wb') as f:
                                     f.write(r.content)
                                 if os.path.getsize(fp) > 0:
