@@ -1952,8 +1952,12 @@ def download_threads_post(url):
             if tpai:
                 logger.warning(f"Threads tpai keys = {list(tpai.keys())}")
                 for k in tpai:
-                    if k in ('video_versions', 'image_versions2', 'video', 'image', 'media'):
+                    if k in ('video_versions', 'image_versions2', 'video', 'image', 'media', 'video_url', 'image_url'):
                         logger.warning(f"Threads tpai[{k}] = {str(tpai[k])[:500]}")
+                    elif isinstance(tpai[k], dict):
+                        sub = tpai[k]
+                        if 'video_versions' in sub or 'image_versions2' in sub or 'url' in sub:
+                            logger.warning(f"Threads tpai[{k}] keys={list(sub.keys())} = {str(sub)[:300]}")
             if tpai.get('image_versions2'):
                 u = _best_image(tpai['image_versions2'])
                 if u:
@@ -1981,6 +1985,19 @@ def download_threads_post(url):
                     if urls:
                         media_urls.extend(urls)
                         break
+
+        if not media_urls:
+            import json
+            item_str = json.dumps(item, default=str)
+            import re as _re
+            cdn_urls = _re.findall(r'https?://(?:scontent|instagram|satisfying)[^\s"\'\\]+', item_str)
+            if cdn_urls:
+                logger.warning(f"Threads: found CDN URLs in item: {cdn_urls[:5]}")
+                for u in cdn_urls[:3]:
+                    if 'video' in u or '.mp4' in u:
+                        media_urls.append(('video', u))
+                    else:
+                        media_urls.append(('image', u))
 
         if not media_urls:
             logger.warning(f"Threads: item keys = {list(item.keys())}")
