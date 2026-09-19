@@ -1988,32 +1988,25 @@ def download_threads_post(url):
         if not media_urls:
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
-        dl_headers = {
-            'User-Agent': 'Instagram 275.0.0.27.98 Android',
-            'Referer': 'https://www.threads.net/',
-        }
-
         files = []
         for i, (mtype, murl) in enumerate(media_urls[:10]):
             try:
                 if mtype == 'file' and os.path.isfile(murl):
                     files.append(murl)
                     continue
-                dr = session.get(murl, headers=dl_headers, timeout=60, stream=True)
-                if dr.status_code == 200:
+                data = _ig_download_bytes(murl)
+                if data and len(data) > 5000:
                     ext = 'mp4' if mtype == 'video' else 'jpg'
                     filepath = os.path.join(tmp_dir, f'media_{i}.{ext}')
                     with open(filepath, 'wb') as f:
-                        for chunk in dr.iter_content(chunk_size=65536):
-                            f.write(chunk)
-                    if os.path.getsize(filepath) > 0:
-                        with open(filepath, 'rb') as f:
-                            header = f.read(12)
-                        if ext == 'jpg' and b'ftyp' in header:
-                            new_path = filepath.replace('.jpg', '.mp4')
-                            os.rename(filepath, new_path)
-                            filepath = new_path
-                        files.append(filepath)
+                        f.write(data)
+                    if ext == 'jpg' and data[:4] == b'\x00\x00\x00\x1c' or data[:4] == b'\x00\x00\x00\x18' or b'ftyp' in data[:12]:
+                        new_path = filepath.replace('.jpg', '.mp4')
+                        os.rename(filepath, new_path)
+                        filepath = new_path
+                    files.append(filepath)
+                else:
+                    logger.error(f"Threads media download [{i}]: empty or too small ({len(data) if data else 0} bytes)")
             except Exception as e:
                 logger.error(f"Threads media download [{i}]: {e}")
 
