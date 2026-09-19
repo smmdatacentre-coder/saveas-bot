@@ -1996,6 +1996,9 @@ def download_threads_post(url):
         files = []
         for i, (mtype, murl) in enumerate(media_urls[:10]):
             try:
+                if mtype == 'file' and os.path.isfile(murl):
+                    files.append(murl)
+                    continue
                 dr = session.get(murl, headers=dl_headers, timeout=60, stream=True)
                 if dr.status_code == 200:
                     ext = 'mp4' if mtype == 'video' else 'jpg'
