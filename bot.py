@@ -1949,6 +1949,11 @@ def download_threads_post(url):
 
         if not media_urls:
             tpai = item.get('text_post_app_info', {}) if isinstance(item.get('text_post_app_info'), dict) else {}
+            if tpai:
+                logger.warning(f"Threads tpai keys = {list(tpai.keys())}")
+                for k in tpai:
+                    if k in ('video_versions', 'image_versions2', 'video', 'image', 'media'):
+                        logger.warning(f"Threads tpai[{k}] = {str(tpai[k])[:500]}")
             if tpai.get('image_versions2'):
                 u = _best_image(tpai['image_versions2'])
                 if u:
@@ -1960,9 +1965,27 @@ def download_threads_post(url):
                     media_urls.append(('video', best['url']))
 
         if not media_urls:
+            cc = item.get('creative_config', {}) if isinstance(item.get('creative_config'), dict) else {}
+            if cc:
+                logger.warning(f"Threads creative_config keys = {list(cc.keys())}")
+                if cc.get('image_versions2'):
+                    u = _best_image(cc['image_versions2'])
+                    if u:
+                        media_urls.append(('image', u))
+
+        if not media_urls:
+            for k, v in item.items():
+                if isinstance(v, dict) and ('video_versions' in v or 'image_versions2' in v):
+                    logger.warning(f"Threads: found media in item[{k}] = {str(v)[:300]}")
+                    urls = _extract_media_from_item(v)
+                    if urls:
+                        media_urls.extend(urls)
+                        break
+
+        if not media_urls:
             logger.warning(f"Threads: item keys = {list(item.keys())}")
             logger.warning(f"Threads: image_versions2 = {str(item.get('image_versions2', {}))[:300]}")
-            logger.warning(f"Threads: text_post_app_info = {str(item.get('text_post_app_info', {}))[:500]}")
+            logger.warning(f"Threads: text_post_app_info = {str(tpai)[:500]}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         dl_headers = {
