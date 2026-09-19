@@ -1914,37 +1914,55 @@ def download_threads_post(url):
         media_urls = []
 
         def _best_image(iv2):
-            cands = iv2.get('candidates', []) if isinstance(iv2, dict) else []
+            if not isinstance(iv2, dict):
+                return None
+            cands = iv2.get('candidates', [])
             if cands:
                 best = max(cands, key=lambda x: int(x.get('width', 0) or 0) * int(x.get('height', 0) or 0))
                 return best.get('url')
+            if iv2.get('url'):
+                return iv2['url']
             return None
+
+        def _extract_media_from_item(obj):
+            urls = []
+            if not isinstance(obj, dict):
+                return urls
+            if obj.get('video_versions'):
+                vids = obj['video_versions']
+                if vids:
+                    best = max(vids, key=lambda x: int(x.get('type', 0) or 0))
+                    urls.append(('video', best['url']))
+            if obj.get('image_versions2'):
+                u = _best_image(obj['image_versions2'])
+                if u:
+                    urls.append(('image', u))
+            return urls
 
         if item.get('carousel_media'):
             for cm in item['carousel_media']:
-                if cm.get('video_versions'):
-                    best = max(cm['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
-                    media_urls.append(('video', best['url']))
-                elif cm.get('image_versions2'):
-                    u = _best_image(cm['image_versions2'])
-                    if u:
-                        media_urls.append(('image', u))
+                urls = _extract_media_from_item(cm)
+                media_urls.extend(urls)
 
         if not media_urls:
-            if item.get('video_versions'):
-                best = max(item['video_versions'], key=lambda x: int(x.get('type', 0) or 0))
-                media_urls.append(('video', best['url']))
-            elif item.get('image_versions2'):
-                u = _best_image(item['image_versions2'])
+            media_urls = _extract_media_from_item(item)
+
+        if not media_urls:
+            tpai = item.get('text_post_app_info', {}) if isinstance(item.get('text_post_app_info'), dict) else {}
+            if tpai.get('image_versions2'):
+                u = _best_image(tpai['image_versions2'])
                 if u:
                     media_urls.append(('image', u))
+            if not media_urls and tpai.get('video_versions'):
+                vids = tpai['video_versions']
+                if vids:
+                    best = max(vids, key=lambda x: int(x.get('type', 0) or 0))
+                    media_urls.append(('video', best['url']))
 
         if not media_urls:
             logger.warning(f"Threads: item keys = {list(item.keys())}")
             logger.warning(f"Threads: image_versions2 = {str(item.get('image_versions2', {}))[:300]}")
-            logger.warning(f"Threads: video_versions = {str(item.get('video_versions', {}))[:300]}")
-            logger.warning(f"Threads: carousel_media = {str(item.get('carousel_media', {}))[:300]}")
-            logger.warning(f"Threads: text_post_app_info = {str(item.get('text_post_app_info', {}))[:300]}")
+            logger.warning(f"Threads: text_post_app_info = {str(item.get('text_post_app_info', {}))[:500]}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         dl_headers = {
