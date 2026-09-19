@@ -1941,23 +1941,40 @@ def download_threads_post(url):
 
         if item.get('carousel_media'):
             for cm in item['carousel_media']:
-                urls = _extract_media_from_item(cm)
-                media_urls.extend(urls)
+                media_urls.extend(_extract_media_from_item(cm))
 
         if not media_urls:
             media_urls = _extract_media_from_item(item)
 
-        if not media_urls:
-            tpai = item.get('text_post_app_info', {}) if isinstance(item.get('text_post_app_info'), dict) else {}
-            if tpai:
-                logger.warning(f"Threads tpai keys = {list(tpai.keys())}")
-                for k in tpai:
-                    if k in ('video_versions', 'image_versions2', 'video', 'image', 'media', 'video_url', 'image_url'):
-                        logger.warning(f"Threads tpai[{k}] = {str(tpai[k])[:500]}")
-                    elif isinstance(tpai[k], dict):
-                        sub = tpai[k]
-                        if 'video_versions' in sub or 'image_versions2' in sub or 'url' in sub:
-                            logger.warning(f"Threads tpai[{k}] keys={list(sub.keys())} = {str(sub)[:300]}")
+        tpai = item.get('text_post_app_info', {}) if isinstance(item.get('text_post_app_info'), dict) else {}
+
+        if not media_urls and tpai:
+            lim = tpai.get('linked_inline_media', {}) if isinstance(tpai.get('linked_inline_media'), dict) else {}
+            if lim:
+                media_urls.extend(_extract_media_from_item(lim))
+
+        if not media_urls and tpai:
+            lim = tpai.get('linked_inline_media', {}) if isinstance(tpai.get('linked_inline_media'), dict) else {}
+            lim_pk = lim.get('pk', '')
+            if lim_pk:
+                lim_item = _ig_api_get(lim_pk)
+                if lim_item:
+                    media_urls.extend(_extract_media_from_item(lim_item))
+
+        if not media_urls and tpai:
+            lpa = tpai.get('link_preview_attachment', {}) if isinstance(tpai.get('link_preview_attachment'), dict) else {}
+            ig_url = lpa.get('url', '') or lpa.get('raw_url', '')
+            if ig_url and 'instagram.com' in ig_url:
+                logger.info(f"Threads: downloading linked media from: {ig_url}")
+                try:
+                    ig_files, ig_cap, _ = download_ig_post(ig_url, tmp_dir)
+                    if ig_files:
+                        for fp in ig_files:
+                            media_urls.append(('file', fp))
+                except Exception as e:
+                    logger.error(f"Threads: failed to download linked media: {e}")
+
+        if not media_urls and tpai:
             if tpai.get('image_versions2'):
                 u = _best_image(tpai['image_versions2'])
                 if u:
@@ -1969,40 +1986,6 @@ def download_threads_post(url):
                     media_urls.append(('video', best['url']))
 
         if not media_urls:
-            cc = item.get('creative_config', {}) if isinstance(item.get('creative_config'), dict) else {}
-            if cc:
-                logger.warning(f"Threads creative_config keys = {list(cc.keys())}")
-                if cc.get('image_versions2'):
-                    u = _best_image(cc['image_versions2'])
-                    if u:
-                        media_urls.append(('image', u))
-
-        if not media_urls:
-            for k, v in item.items():
-                if isinstance(v, dict) and ('video_versions' in v or 'image_versions2' in v):
-                    logger.warning(f"Threads: found media in item[{k}] = {str(v)[:300]}")
-                    urls = _extract_media_from_item(v)
-                    if urls:
-                        media_urls.extend(urls)
-                        break
-
-        if not media_urls:
-            import json
-            item_str = json.dumps(item, default=str)
-            import re as _re
-            cdn_urls = _re.findall(r'https?://(?:scontent|instagram|satisfying)[^\s"\'\\]+', item_str)
-            if cdn_urls:
-                logger.warning(f"Threads: found CDN URLs in item: {cdn_urls[:5]}")
-                for u in cdn_urls[:3]:
-                    if 'video' in u or '.mp4' in u:
-                        media_urls.append(('video', u))
-                    else:
-                        media_urls.append(('image', u))
-
-        if not media_urls:
-            logger.warning(f"Threads: item keys = {list(item.keys())}")
-            logger.warning(f"Threads: image_versions2 = {str(item.get('image_versions2', {}))[:300]}")
-            logger.warning(f"Threads: text_post_app_info = {str(tpai)[:500]}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         dl_headers = {
