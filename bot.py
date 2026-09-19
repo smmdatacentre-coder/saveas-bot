@@ -1941,7 +1941,10 @@ def download_threads_post(url):
 
         if not media_urls:
             logger.warning(f"Threads: item keys = {list(item.keys())}")
-            logger.warning(f"Threads: item sample = {str(item)[:500]}")
+            logger.warning(f"Threads: image_versions2 = {str(item.get('image_versions2', {}))[:300]}")
+            logger.warning(f"Threads: video_versions = {str(item.get('video_versions', {}))[:300]}")
+            logger.warning(f"Threads: carousel_media = {str(item.get('carousel_media', {}))[:300]}")
+            logger.warning(f"Threads: text_post_app_info = {str(item.get('text_post_app_info', {}))[:300]}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         dl_headers = {
