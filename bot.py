@@ -896,6 +896,7 @@ def download_ig_post(url):
                     if vids:
                         vids.sort(key=lambda v: int(v.get('width', 0) or 0) * int(v.get('height', 0) or 0), reverse=True)
                         dl_url = vids[0]['url']
+                        logger.info(f"Story video: downloading from cdninstagram...")
                         data = _ig_download_bytes(dl_url)
                         if data:
                             fp = os.path.join(tmp_dir, 'story.mp4')
@@ -903,6 +904,10 @@ def download_ig_post(url):
                                 f.write(data)
                             if os.path.getsize(fp) > 0:
                                 return [fp], '', tmp_dir
+                        else:
+                            logger.error("Story video: _ig_download_bytes returned None")
+                    else:
+                        logger.error(f"Story video: media_type=2 but no video_versions. Keys: {list(item.keys())}")
                 elif item.get('image_versions2'):
                     cands = item['image_versions2'].get('candidates', [])
                     if cands:
@@ -1935,6 +1940,8 @@ def download_threads_post(url):
                     media_urls.append(('image', u))
 
         if not media_urls:
+            logger.warning(f"Threads: item keys = {list(item.keys())}")
+            logger.warning(f"Threads: item sample = {str(item)[:500]}")
             return {'type': 'error', 'error': 'Медиа не найдено в посте'}
 
         dl_headers = {
