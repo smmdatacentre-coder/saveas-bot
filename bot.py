@@ -1951,15 +1951,15 @@ def download_threads_post(url):
         if not media_urls and tpai:
             lim = tpai.get('linked_inline_media', {}) if isinstance(tpai.get('linked_inline_media'), dict) else {}
             if lim:
-                media_urls.extend(_extract_media_from_item(lim))
-
-        if not media_urls and tpai:
-            lim = tpai.get('linked_inline_media', {}) if isinstance(tpai.get('linked_inline_media'), dict) else {}
-            lim_pk = lim.get('pk', '')
-            if lim_pk:
-                lim_item = _ig_api_get(lim_pk)
-                if lim_item:
-                    media_urls.extend(_extract_media_from_item(lim_item))
+                lim_product = lim.get('product_type', '')
+                if lim_product in ('clips', 'video', 'igtv'):
+                    lim_pk = lim.get('pk', '')
+                    if lim_pk:
+                        lim_item = _ig_api_get(lim_pk)
+                        if lim_item:
+                            media_urls.extend(_extract_media_from_item(lim_item))
+                else:
+                    media_urls.extend(_extract_media_from_item(lim))
 
         if not media_urls and tpai:
             lpa = tpai.get('link_preview_attachment', {}) if isinstance(tpai.get('link_preview_attachment'), dict) else {}
