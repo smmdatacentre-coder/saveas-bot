@@ -1994,19 +1994,33 @@ def download_threads_post(url):
                 if mtype == 'file' and os.path.isfile(murl):
                     files.append(murl)
                     continue
-                data = _ig_download_bytes(murl)
-                if data and len(data) > 5000:
+                data = None
+                if HAS_CURL_CFFI:
+                    try:
+                        r = cf_requests.get(murl, impersonate="chrome", timeout=30)
+                        if r.status_code == 200 and len(r.content) > 5000:
+                            data = r.content
+                    except Exception as e:
+                        logger.error(f"Threads curl_cffi download [{i}]: {e}")
+                if not data:
+                    try:
+                        r = requests.get(murl, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}, timeout=30)
+                        if r.status_code == 200 and len(r.content) > 5000:
+                            data = r.content
+                    except Exception as e:
+                        logger.error(f"Threads requests download [{i}]: {e}")
+                if data:
                     ext = 'mp4' if mtype == 'video' else 'jpg'
                     filepath = os.path.join(tmp_dir, f'media_{i}.{ext}')
                     with open(filepath, 'wb') as f:
                         f.write(data)
-                    if ext == 'jpg' and data[:4] == b'\x00\x00\x00\x1c' or data[:4] == b'\x00\x00\x00\x18' or b'ftyp' in data[:12]:
+                    if ext == 'jpg' and (data[:4] == b'\x00\x00\x00\x1c' or data[:4] == b'\x00\x00\x00\x18' or b'ftyp' in data[:12]):
                         new_path = filepath.replace('.jpg', '.mp4')
                         os.rename(filepath, new_path)
                         filepath = new_path
                     files.append(filepath)
                 else:
-                    logger.error(f"Threads media download [{i}]: empty or too small ({len(data) if data else 0} bytes)")
+                    logger.error(f"Threads media download [{i}]: failed from both methods, url={murl[:100]}")
             except Exception as e:
                 logger.error(f"Threads media download [{i}]: {e}")
 
